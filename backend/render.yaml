@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: payterminal-backend
+    env: node
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false
+    disk:
+      name: payterminal-data
+      mountPath: /opt/render/project/src/backend/data
+      sizeGB: 1
