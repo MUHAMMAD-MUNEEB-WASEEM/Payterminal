@@ -3,8 +3,9 @@ import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import toast from 'react-hot-toast';
 import { Lock, CheckCircle, AlertCircle, CreditCard } from 'lucide-react';
+import { getImageUrl, getApiBaseUrl } from '../utils/api';
 
-const api = axios.create({ baseURL: 'http://localhost:5000/api' });
+const api = axios.create({ baseURL: `${getApiBaseUrl()}/api` });
 
 export default function PublicInvoice() {
   const { invoiceId } = useParams();
@@ -190,7 +191,7 @@ export default function PublicInvoice() {
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6 text-center">
           {invoice.brand?.logo ? (
             <img 
-              src={`http://localhost:5000${invoice.brand.logo}`} 
+              src={getImageUrl(invoice.brand.logo)} 
               alt={invoice.brand.name}
               className="h-20 mx-auto mb-3 object-contain"
             />

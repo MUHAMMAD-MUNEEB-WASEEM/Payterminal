@@ -3,6 +3,7 @@ import api from '../api/axios';
 import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
 import { Users as UsersIcon, CheckCircle, XCircle, Clock, Trash2, Building2 } from 'lucide-react';
+import { getImageUrl } from '../utils/api';
 
 export default function Users() {
   const [users, setUsers] = useState([]);
@@ -192,7 +193,7 @@ export default function Users() {
                     <div key={brand._id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                       <div className="flex items-center gap-3">
                         {brand.logo ? (
-                          <img src={`http://localhost:5000${brand.logo}`} alt={brand.name} className="w-10 h-10 rounded-lg object-cover border border-gray-200" />
+                          <img src={getImageUrl(brand.logo)} alt={brand.name} className="w-10 h-10 rounded-lg object-cover border border-gray-200" />
                         ) : (
                           <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center">
                             <Building2 size={18} className="text-blue-400" />
@@ -227,7 +228,7 @@ export default function Users() {
                       <div key={brand._id} className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg">
                         <div className="flex items-center gap-3">
                           {brand.logo ? (
-                            <img src={`http://localhost:5000${brand.logo}`} alt={brand.name} className="w-10 h-10 rounded-lg object-cover border border-gray-200" />
+                            <img src={getImageUrl(brand.logo)} alt={brand.name} className="w-10 h-10 rounded-lg object-cover border border-gray-200" />
                           ) : (
                             <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center">
                               <Building2 size={18} className="text-blue-400" />

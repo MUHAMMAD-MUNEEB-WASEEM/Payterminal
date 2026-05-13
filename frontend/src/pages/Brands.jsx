@@ -3,6 +3,7 @@ import api from '../api/axios';
 import Modal from '../components/Modal';
 import toast from 'react-hot-toast';
 import { Plus, Pencil, Trash2, Building2, CreditCard } from 'lucide-react';
+import { getImageUrl } from '../utils/api';
 
 const EMPTY_FORM = { name: '', brandNo: '', logo: null, redirectUrl: '', enableRedirect: false };
 
@@ -60,7 +61,7 @@ export default function Brands() {
       redirectUrl: brand.redirectUrl || '',
       enableRedirect: brand.enableRedirect || false
     });
-    setPreview(brand.logo ? `http://localhost:5000${brand.logo}` : null);
+    setPreview(brand.logo ? getImageUrl(brand.logo) : null);
     setShowModal(true);
   };
 
@@ -172,7 +173,7 @@ export default function Brands() {
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
                   {brand.logo ? (
-                    <img src={`http://localhost:5000${brand.logo}`} alt={brand.name} className="w-12 h-12 rounded-lg object-cover border border-gray-200" />
+                    <img src={getImageUrl(brand.logo)} alt={brand.name} className="w-12 h-12 rounded-lg object-cover border border-gray-200" />
                   ) : (
                     <div className="w-12 h-12 bg-blue-50 rounded-lg flex items-center justify-center">
                       <Building2 size={20} className="text-blue-400" />

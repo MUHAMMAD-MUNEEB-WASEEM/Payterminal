@@ -1,5 +1,6 @@
 import { CreditCard, Printer, Link as LinkIcon } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { getImageUrl } from '../utils/api';
 
 export default function InvoiceView({ invoice, onPay, payingId }) {
   const officeNo = invoice.brandNo || invoice.brand?.brandNo || null;
@@ -38,7 +39,7 @@ export default function InvoiceView({ invoice, onPay, payingId }) {
             <div className="text-right">
               {invoice.brand?.logo && (
                 <img
-                  src={`http://localhost:5000${invoice.brand.logo}`}
+                  src={getImageUrl(invoice.brand.logo)}
                   alt={invoice.brand.name}
                   className="w-16 h-16 rounded-lg object-cover border-2 border-white/30 mb-2 ml-auto"
                 />
