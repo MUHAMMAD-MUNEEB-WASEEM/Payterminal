@@ -1,18 +1,22 @@
 import axios from 'axios';
 
-// Determine API URL based on environment
-let API_URL = import.meta.env.VITE_API_URL;
-
-// If not set, use defaults based on hostname
-if (!API_URL) {
-  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    API_URL = 'http://localhost:5000';
-  } else {
-    // Production - use Render backend
-    API_URL = 'https://payterminal.onrender.com';
+// Determine API URL at runtime (not build time)
+function getApiUrl() {
+  // Check if we're in production (Vercel)
+  if (window.location.hostname.includes('vercel.app') || window.location.hostname.includes('payterminalportal.com')) {
+    return 'https://payterminal.onrender.com';
   }
+  
+  // Local development
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://localhost:5000';
+  }
+  
+  // Fallback
+  return 'https://payterminal.onrender.com';
 }
 
+const API_URL = getApiUrl();
 console.log('API URL:', API_URL);
 
 const api = axios.create({
