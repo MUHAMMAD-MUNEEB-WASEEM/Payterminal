@@ -1,6 +1,19 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+// Determine API URL based on environment
+let API_URL = import.meta.env.VITE_API_URL;
+
+// If not set, use defaults based on hostname
+if (!API_URL) {
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    API_URL = 'http://localhost:5000';
+  } else {
+    // Production - use Render backend
+    API_URL = 'https://payterminal.onrender.com';
+  }
+}
+
+console.log('API URL:', API_URL);
 
 const api = axios.create({
   baseURL: `${API_URL}/api`,
