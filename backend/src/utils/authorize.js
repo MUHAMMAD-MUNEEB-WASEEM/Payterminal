@@ -6,11 +6,23 @@
  */
 async function processAuthorizePayment(credentials, paymentData) {
   try {
+    // Ensure credentials exist
+    if (!credentials) {
+      console.error('No credentials provided');
+      return {
+        success: false,
+        error: 'Merchant credentials not configured',
+      };
+    }
+
+    const mode = credentials.mode || 'sandbox';
+    
     console.log('Authorize.net Payment Request:', {
-      mode: credentials.mode,
+      mode,
       amount: paymentData.amount,
       hasApiLoginId: !!credentials.apiLoginId,
       hasTransactionKey: !!credentials.transactionKey,
+      credentialsKeys: Object.keys(credentials),
     });
 
     // Test mode: Accept test cards
@@ -28,7 +40,7 @@ async function processAuthorizePayment(credentials, paymentData) {
     const cleanCard = paymentData.cardNumber.replace(/\s/g, '');
     
     // In test mode or sandbox, simulate success for test cards
-    if (credentials.mode !== 'live' || testCards.includes(cleanCard)) {
+    if (mode !== 'live' || testCards.includes(cleanCard)) {
       console.log('Processing in test/sandbox mode');
       return {
         success: true,
@@ -38,7 +50,7 @@ async function processAuthorizePayment(credentials, paymentData) {
     }
 
     // For production with actual Authorize.net SDK
-    if (credentials.apiLoginId && credentials.transactionKey && credentials.mode === 'live') {
+    if (credentials.apiLoginId && credentials.transactionKey && mode === 'live') {
       console.log('Processing live payment with Authorize.net SDK');
       
       const ApiContracts = require('authorizenet').APIContracts;
@@ -71,7 +83,7 @@ async function processAuthorizePayment(credentials, paymentData) {
       const ctrl = new ApiControllers.CreateTransactionController(createRequest.getJSON());
       
       // Set endpoint based on mode
-      if (credentials.mode === 'live') {
+      if (mode === 'live') {
         ctrl.setEnvironment(SDKConstants.endpoint.production);
       } else {
         ctrl.setEnvironment(SDKConstants.endpoint.sandbox);
