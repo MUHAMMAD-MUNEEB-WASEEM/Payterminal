@@ -7,20 +7,32 @@ const db = require('./src/db');
 
 const app = express();
 
+// Allow all origins for now (can restrict later if needed)
 app.use(cors({
-  origin: (origin, callback) => {
-    // Allow any localhost origin or no origin (e.g. curl)
-    if (!origin || /^http:\/\/localhost(:\d+)?$/.test(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: true,
   credentials: true,
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Root route
+app.get('/', (req, res) => {
+  res.json({ 
+    message: 'PayTerminal API is running',
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      auth: '/api/auth',
+      users: '/api/users',
+      brands: '/api/brands',
+      invoices: '/api/invoices',
+      merchants: '/api/merchants',
+      userBrands: '/api/user-brands',
+      notifications: '/api/notifications'
+    }
+  });
+});
 
 app.use('/api/auth', require('./src/routes/auth'));
 app.use('/api/users', require('./src/routes/users'));
