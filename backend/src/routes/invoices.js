@@ -26,11 +26,37 @@ router.get('/', auth, async (req, res) => {
 
 // Public invoice view (no auth required)
 router.get('/public/:id', async (req, res) => {
+  console.log('🔍 PUBLIC INVOICE ROUTE HIT - ID:', req.params.id);
   try {
-    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    let invoice = await db.invoices.findOne({ _id: req.params.id });
+    console.log('📄 Invoice found:', !!invoice);
+    
     if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
+    
+    console.log('⏰ Current linkOpenedAt:', invoice.linkOpenedAt);
+    
+    // Record link open time if not already recorded
+    if (!invoice.linkOpenedAt) {
+      const now = new Date().toISOString();
+      console.log('✅ Recording link open for invoice:', req.params.id, 'at', now);
+      
+      // Update the invoice
+      await db.invoices.update(
+        { _id: req.params.id },
+        { $set: { linkOpenedAt: now } },
+        {}
+      );
+      
+      // Fetch updated invoice to confirm
+      invoice = await db.invoices.findOne({ _id: req.params.id });
+      console.log('✅ Updated invoice linkOpenedAt:', invoice.linkOpenedAt);
+    } else {
+      console.log('⏭️ Link already opened at:', invoice.linkOpenedAt);
+    }
+    
     res.json(await withBrand(invoice));
   } catch (err) {
+    console.error('❌ Error in public invoice view:', err);
     res.status(500).json({ message: err.message });
   }
 });

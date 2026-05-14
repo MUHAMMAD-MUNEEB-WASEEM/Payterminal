@@ -5,15 +5,15 @@ import toast from 'react-hot-toast';
 import { Lock, CheckCircle, AlertCircle, CreditCard } from 'lucide-react';
 import { getImageUrl, getApiBaseUrl } from '../utils/api';
 
-const api = axios.create({ baseURL: `${getApiBaseUrl()}/api` });
-
 export default function PublicInvoice() {
   const { invoiceId } = useParams();
   const [invoice, setInvoice] = useState(null);
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState('verify'); // 'verify' | 'payment' | 'success'
   const [merchants, setMerchants] = useState([]);
-  const [selectedMerchant, setSelectedMerchant] = useState(null);
+  
+  // Create API instance with correct base URL
+  const api = axios.create({ baseURL: `${getApiBaseUrl()}/api` });const [selectedMerchant, setSelectedMerchant] = useState(null);
   
   // Verification form
   const [verifyData, setVerifyData] = useState({
@@ -335,10 +335,10 @@ export default function PublicInvoice() {
                       placeholder="1234 5678 9012 3456"
                       maxLength="19"
                     />
-                    <div className="flex gap-3 mt-2">
-                      <img src="https://upload.wikimedia.org/wikipedia/commons/0/04/Visa.svg" alt="Visa" className="h-6" />
-                      <img src="https://upload.wikimedia.org/wikipedia/commons/2/2a/Mastercard-logo.svg" alt="Mastercard" className="h-6" />
-                      <img src="https://upload.wikimedia.org/wikipedia/commons/f/fa/American_Express_logo_%282018%29.svg" alt="Amex" className="h-6" />
+                    <div className="flex gap-4 mt-3">
+                      <img src="https://cdn.worldvectorlogo.com/logos/visa-4.svg" alt="Visa" className="h-8 w-auto" />
+                      <img src="https://cdn.worldvectorlogo.com/logos/mastercard-6.svg" alt="Mastercard" className="h-8 w-auto" />
+                      <img src="https://cdn.worldvectorlogo.com/logos/american-express-3.svg" alt="Amex" className="h-8 w-auto" />
                     </div>
                   </div>
 

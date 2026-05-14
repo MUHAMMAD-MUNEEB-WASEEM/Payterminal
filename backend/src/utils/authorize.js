@@ -87,7 +87,13 @@ async function processAuthorizePayment(credentials, paymentData) {
         createRequest.setTransactionRequest(transactionRequestType);
 
         const ctrl = new ApiControllers.CreateTransactionController(createRequest.getJSON());
-        ctrl.setEnvironment(SDKConstants.endpoint.production);
+        
+        // Use correct endpoint based on mode
+        if (mode === 'live') {
+          ctrl.setEnvironment(SDKConstants.endpoint.production);
+        } else {
+          ctrl.setEnvironment(SDKConstants.endpoint.sandbox);
+        }
 
         return new Promise((resolve) => {
           ctrl.execute(() => {

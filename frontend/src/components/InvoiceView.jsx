@@ -67,10 +67,10 @@ export default function InvoiceView({ invoice, onPay, payingId }) {
               <p className="font-medium text-gray-900 mt-0.5">{new Date(invoice.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
             </div>
           </div>
-          {(invoice.customerName || invoice.customerEmail || invoice.customerSerialNumber) && (
+          {(invoice.customerName || invoice.customerEmail || invoice.customerSerialNumber || invoice.linkOpenedAt) && (
             <div className="border-t border-blue-200 pt-3">
               <p className="text-xs text-gray-500 uppercase tracking-wide font-medium mb-2">Customer Information</p>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 {invoice.customerName && (
                   <div>
                     <p className="text-xs text-gray-500">Name</p>
@@ -87,6 +87,12 @@ export default function InvoiceView({ invoice, onPay, payingId }) {
                   <div>
                     <p className="text-xs text-gray-500">Serial Number</p>
                     <p className="font-medium text-gray-900 text-sm">{invoice.customerSerialNumber}</p>
+                  </div>
+                )}
+                {invoice.linkOpenedAt && (
+                  <div>
+                    <p className="text-xs text-gray-500">Link Opened</p>
+                    <p className="font-medium text-green-700 text-sm">✓ {new Date(invoice.linkOpenedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</p>
                   </div>
                 )}
               </div>

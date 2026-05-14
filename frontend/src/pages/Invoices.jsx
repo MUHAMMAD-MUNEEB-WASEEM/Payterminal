@@ -24,6 +24,7 @@ export default function Invoices() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [payingId, setPayingId] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
 
   const fetchAll = async () => {
     try {
@@ -113,6 +114,12 @@ export default function Invoices() {
     return <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${map[status] || ''}`}>{status}</span>;
   };
 
+  // Filter invoices based on search term
+  const filteredInvoices = invoices.filter(inv => 
+    (inv.invoiceNumber?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
+    (inv.customerName?.toLowerCase() || '').includes(searchTerm.toLowerCase())
+  );
+
   if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full" /></div>;
 
   return (
@@ -120,11 +127,27 @@ export default function Invoices() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Invoices</h1>
-          <p className="text-gray-500 text-sm mt-1">{invoices.length} invoice{invoices.length !== 1 ? 's' : ''} total</p>
+          <p className="text-gray-500 text-sm mt-1">{filteredInvoices.length} of {invoices.length} invoice{invoices.length !== 1 ? 's' : ''}</p>
         </div>
-        <button onClick={() => { setForm(EMPTY_FORM); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors">
-          <Plus size={16} /> New Invoice
-        </button>
+        <div className="flex gap-2">
+          <button onClick={fetchAll} className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors">
+            <RefreshCw size={16} /> Refresh
+          </button>
+          <button onClick={() => { setForm(EMPTY_FORM); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors">
+            <Plus size={16} /> New Invoice
+          </button>
+        </div>
+      </div>
+
+      {/* Search Bar */}
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <input
+          type="text"
+          placeholder="Search by invoice number or customer name..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+        />
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -133,27 +156,41 @@ export default function Invoices() {
             <thead>
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="text-left px-6 py-3 text-gray-500 font-medium">Invoice #</th>
+                <th className="text-left px-6 py-3 text-gray-500 font-medium">Customer</th>
                 <th className="text-left px-6 py-3 text-gray-500 font-medium">Brand</th>
                 <th className="text-left px-6 py-3 text-gray-500 font-medium">Office #</th>
                 <th className="text-left px-6 py-3 text-gray-500 font-medium">Total</th>
                 <th className="text-left px-6 py-3 text-gray-500 font-medium">Status</th>
+                <th className="text-left px-6 py-3 text-gray-500 font-medium">Link</th>
                 <th className="text-left px-6 py-3 text-gray-500 font-medium">Date</th>
                 <th className="text-left px-6 py-3 text-gray-500 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {invoices.length === 0 ? (
+              {filteredInvoices.length === 0 ? (
                 <tr><td colSpan={7} className="text-center py-12 text-gray-400">
                   <FileText size={32} className="mx-auto mb-2 text-gray-300" />
-                  No invoices yet
+                  {searchTerm ? 'No invoices match your search' : 'No invoices yet'}
                 </td></tr>
-              ) : invoices.map(inv => (
+              ) : filteredInvoices.map(inv => (
                 <tr key={inv._id} className="border-b border-gray-50 hover:bg-gray-50">
                   <td className="px-6 py-4 font-mono font-medium text-blue-600">{inv.invoiceNumber}</td>
+                  <td className="px-6 py-4 text-gray-700">{inv.customerName || '—'}</td>
                   <td className="px-6 py-4 text-gray-700">{inv.brand?.name || '—'}</td>
                   <td className="px-6 py-4 text-gray-600">{inv.brandNo || <span className="text-gray-400 italic">N/A</span>}</td>
                   <td className="px-6 py-4 font-semibold">USD ${inv.total?.toFixed(2)}</td>
                   <td className="px-6 py-4">{statusBadge(inv.status)}</td>
+                  <td className="px-6 py-4">
+                    {inv.linkOpenedAt ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                        ✓ Opened
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                        Not opened
+                      </span>
+                    )}
+                  </td>
                   <td className="px-6 py-4 text-gray-500">{new Date(inv.createdAt).toLocaleDateString()}</td>
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-1">

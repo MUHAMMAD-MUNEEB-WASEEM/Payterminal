@@ -2,7 +2,11 @@ const Datastore = require('@seald-io/nedb');
 const path = require('path');
 const fs = require('fs');
 
-const dbDir = path.join(__dirname, '../data');
+// Use /data on production (Render persistent disk), backend/data locally
+const dbDir = process.env.NODE_ENV === 'production' 
+  ? '/data' 
+  : path.join(__dirname, '../data');
+
 if (!fs.existsSync(dbDir)) fs.mkdirSync(dbDir, { recursive: true });
 
 const db = {
