@@ -26,19 +26,15 @@ router.get('/', auth, async (req, res) => {
 
 // Public invoice view (no auth required)
 router.get('/public/:id', async (req, res) => {
-  console.log('🔍 PUBLIC INVOICE ROUTE HIT - ID:', req.params.id);
+  console.log('PUBLIC INVOICE ROUTE HIT - ID:', req.params.id);
   try {
     let invoice = await db.invoices.findOne({ _id: req.params.id });
-    console.log('📄 Invoice found:', !!invoice);
     
     if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
-    
-    console.log('⏰ Current linkOpenedAt:', invoice.linkOpenedAt);
     
     // Record link open time if not already recorded
     if (!invoice.linkOpenedAt) {
       const now = new Date().toISOString();
-      console.log('✅ Recording link open for invoice:', req.params.id, 'at', now);
       
       // Update the invoice
       await db.invoices.update(
@@ -49,14 +45,11 @@ router.get('/public/:id', async (req, res) => {
       
       // Fetch updated invoice to confirm
       invoice = await db.invoices.findOne({ _id: req.params.id });
-      console.log('✅ Updated invoice linkOpenedAt:', invoice.linkOpenedAt);
-    } else {
-      console.log('⏭️ Link already opened at:', invoice.linkOpenedAt);
     }
     
     res.json(await withBrand(invoice));
   } catch (err) {
-    console.error('❌ Error in public invoice view:', err);
+    console.error('Error in public invoice view:', err);
     res.status(500).json({ message: err.message });
   }
 });
@@ -280,6 +273,8 @@ router.post('/', auth, async (req, res) => {
       subtotal: total,
       total,
       status: 'pending',
+      refundAmount: 0,
+      chargebackAmount: 0,
       paymentOrderRef: null,
       paymentLink: null,
       customerEmail,
@@ -357,12 +352,74 @@ router.get('/:id/status', auth, async (req, res) => {
 router.patch('/:id/status', auth, adminOnly, async (req, res) => {
   try {
     const { status } = req.body;
-    if (!['pending', 'paid', 'failed'].includes(status)) {
+    if (!['pending', 'paid', 'failed', 'refunded', 'chargebacked'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status' });
     }
     await db.invoices.update({ _id: req.params.id }, { $set: { status } });
     const invoice = await db.invoices.findOne({ _id: req.params.id });
     res.json(await withBrand(invoice));
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin: Mark invoice as refunded
+router.patch('/:id/refund', auth, adminOnly, async (req, res) => {
+  try {
+    const { refundAmount } = req.body;
+    if (refundAmount === undefined || refundAmount === null) {
+      return res.status(400).json({ message: 'Refund amount is required' });
+    }
+    if (refundAmount < 0) {
+      return res.status(400).json({ message: 'Refund amount cannot be negative' });
+    }
+    
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
+    
+    // Validate refund amount doesn't exceed total
+    if (refundAmount > invoice.total) {
+      return res.status(400).json({ message: 'Refund amount cannot exceed invoice total' });
+    }
+    
+    await db.invoices.update(
+      { _id: req.params.id },
+      { $set: { refundAmount, status: 'refunded', updatedAt: new Date().toISOString() } }
+    );
+    
+    const updatedInvoice = await db.invoices.findOne({ _id: req.params.id });
+    res.json(await withBrand(updatedInvoice));
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin: Mark invoice as chargebacked
+router.patch('/:id/chargeback', auth, adminOnly, async (req, res) => {
+  try {
+    const { chargebackAmount } = req.body;
+    if (chargebackAmount === undefined || chargebackAmount === null) {
+      return res.status(400).json({ message: 'Chargeback amount is required' });
+    }
+    if (chargebackAmount < 0) {
+      return res.status(400).json({ message: 'Chargeback amount cannot be negative' });
+    }
+    
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
+    
+    // Validate chargeback amount doesn't exceed total
+    if (chargebackAmount > invoice.total) {
+      return res.status(400).json({ message: 'Chargeback amount cannot exceed invoice total' });
+    }
+    
+    await db.invoices.update(
+      { _id: req.params.id },
+      { $set: { chargebackAmount, status: 'chargebacked', updatedAt: new Date().toISOString() } }
+    );
+    
+    const updatedInvoice = await db.invoices.findOne({ _id: req.params.id });
+    res.json(await withBrand(updatedInvoice));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

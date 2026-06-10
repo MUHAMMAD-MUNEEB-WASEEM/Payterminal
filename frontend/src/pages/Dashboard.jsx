@@ -22,11 +22,17 @@ export default function Dashboard() {
         } catch {}
 
         const invoices = invoicesRes.data;
-        const revenue = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + i.total, 0);
+        // Calculate net revenue: paid invoices minus refunded and chargebacked amounts
+        const revenue = invoices
+          .filter(i => i.status === 'paid')
+          .reduce((s, i) => s + (i.total - (i.refundAmount || 0) - (i.chargebackAmount || 0)), 0);
         const pending = invoices.filter(i => i.status === 'pending').length;
         const paid = invoices.filter(i => i.status === 'paid').length;
+        // Calculate total refunds and chargebacks for display
+        const refunds = invoices.filter(i => i.status === 'refunded').reduce((s, i) => s + (i.refundAmount || 0), 0);
+        const chargebacks = invoices.filter(i => i.status === 'chargebacked').reduce((s, i) => s + (i.chargebackAmount || 0), 0);
 
-        setStats({ brands: brandsRes.data.length, invoices: invoices.length, users: usersCount, revenue, pending, paid });
+        setStats({ brands: brandsRes.data.length, invoices: invoices.length, users: usersCount, revenue, pending, paid, refunds, chargebacks });
         setRecentInvoices(invoices.slice(0, 5));
       } catch (err) {
         console.error(err);
@@ -41,7 +47,9 @@ export default function Dashboard() {
     { label: 'Total Brands', value: stats.brands, icon: Building2, color: 'blue' },
     { label: 'Total Invoices', value: stats.invoices, icon: FileText, color: 'indigo' },
     { label: 'Total Users', value: stats.users, icon: Users, color: 'violet' },
-    { label: 'Revenue (USD)', value: `$${stats.revenue.toFixed(2)}`, icon: DollarSign, color: 'green' },
+    { label: 'Net Revenue (USD)', value: `$${stats.revenue.toFixed(2)}`, icon: DollarSign, color: 'green' },
+    { label: 'Refunds (USD)', value: `$${(stats.refunds || 0).toFixed(2)}`, icon: DollarSign, color: 'red' },
+    { label: 'Chargebacks (USD)', value: `$${(stats.chargebacks || 0).toFixed(2)}`, icon: DollarSign, color: 'orange' },
     { label: 'Pending Invoices', value: stats.pending, icon: Clock, color: 'yellow' },
     { label: 'Paid Invoices', value: stats.paid, icon: TrendingUp, color: 'emerald' },
   ];
@@ -53,6 +61,8 @@ export default function Dashboard() {
     green: 'bg-green-50 text-green-600',
     yellow: 'bg-yellow-50 text-yellow-600',
     emerald: 'bg-emerald-50 text-emerald-600',
+    red: 'bg-red-50 text-red-600',
+    orange: 'bg-orange-50 text-orange-600',
   };
 
   const statusBadge = (status) => {

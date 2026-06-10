@@ -4,7 +4,7 @@ import Modal from '../components/Modal';
 import InvoiceView from '../components/InvoiceView';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Eye, Trash2, Link as LinkIcon, FileText, RefreshCw, CheckCircle } from 'lucide-react';
+import { Plus, Eye, Trash2, Link as LinkIcon, FileText, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react';
 
 const EMPTY_FORM = { 
   brandId: '', 
@@ -25,6 +25,10 @@ export default function Invoices() {
   const [saving, setSaving] = useState(false);
   const [payingId, setPayingId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [refundModal, setRefundModal] = useState(null);
+  const [chargebackModal, setChargebackModal] = useState(null);
+  const [refundAmount, setRefundAmount] = useState('');
+  const [chargebackAmount, setChargebackAmount] = useState('');
 
   const fetchAll = async () => {
     try {
@@ -109,9 +113,59 @@ export default function Invoices() {
     }
   };
 
-  const statusBadge = (status) => {
-    const map = { pending: 'bg-yellow-100 text-yellow-700', paid: 'bg-green-100 text-green-700', failed: 'bg-red-100 text-red-700' };
-    return <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${map[status] || ''}`}>{status}</span>;
+  const handleRefund = async (invoice) => {
+    if (!refundAmount || parseFloat(refundAmount) <= 0) {
+      toast.error('Enter a valid refund amount');
+      return;
+    }
+    if (parseFloat(refundAmount) > invoice.total) {
+      toast.error('Refund amount cannot exceed invoice total');
+      return;
+    }
+    try {
+      await api.patch(`/invoices/${invoice._id}/refund`, { refundAmount: parseFloat(refundAmount) });
+      toast.success('Invoice marked as refunded');
+      setRefundModal(null);
+      setRefundAmount('');
+      fetchAll();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to refund invoice');
+    }
+  };
+
+  const handleChargeback = async (invoice) => {
+    if (!chargebackAmount || parseFloat(chargebackAmount) <= 0) {
+      toast.error('Enter a valid chargeback amount');
+      return;
+    }
+    if (parseFloat(chargebackAmount) > invoice.total) {
+      toast.error('Chargeback amount cannot exceed invoice total');
+      return;
+    }
+    try {
+      await api.patch(`/invoices/${invoice._id}/chargeback`, { chargebackAmount: parseFloat(chargebackAmount) });
+      toast.success('Invoice marked as chargebacked');
+      setChargebackModal(null);
+      setChargebackAmount('');
+      fetchAll();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to mark invoice as chargebacked');
+    }
+  };
+
+  const statusBadge = (status, refundAmount, chargebackAmount) => {
+    const map = {
+      pending: 'bg-yellow-100 text-yellow-700',
+      paid: 'bg-green-100 text-green-700',
+      failed: 'bg-red-100 text-red-700',
+      refunded: 'bg-red-100 text-red-700',
+      chargebacked: 'bg-orange-100 text-orange-700'
+    };
+    
+    const label = status === 'refunded' ? `Refunded ($${(refundAmount || 0).toFixed(2)})` :
+                   status === 'chargebacked' ? `Chargeback ($${(chargebackAmount || 0).toFixed(2)})` : status;
+    
+    return <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${map[status] || ''}`}>{label}</span>;
   };
 
   // Filter invoices based on search term
@@ -179,7 +233,7 @@ export default function Invoices() {
                   <td className="px-6 py-4 text-gray-700">{inv.brand?.name || '—'}</td>
                   <td className="px-6 py-4 text-gray-600">{inv.brandNo || <span className="text-gray-400 italic">N/A</span>}</td>
                   <td className="px-6 py-4 font-semibold">USD ${inv.total?.toFixed(2)}</td>
-                  <td className="px-6 py-4">{statusBadge(inv.status)}</td>
+                  <td className="px-6 py-4">{statusBadge(inv.status, inv.refundAmount, inv.chargebackAmount)}</td>
                   <td className="px-6 py-4">
                     {inv.linkOpenedAt ? (
                       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
@@ -206,6 +260,16 @@ export default function Invoices() {
                         <span className="p-1.5 text-green-600" title="Paid">
                           <CheckCircle size={15} />
                         </span>
+                      )}
+                      {user?.role === 'admin' && ['paid', 'refunded', 'chargebacked'].includes(inv.status) && (
+                        <>
+                          <button onClick={() => { setRefundModal(inv); setRefundAmount(inv.total); }} title="Refund" className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors">
+                            <AlertCircle size={15} />
+                          </button>
+                          <button onClick={() => { setChargebackModal(inv); setChargebackAmount(inv.total); }} title="Chargeback" className="p-1.5 rounded-lg hover:bg-orange-50 text-orange-600 transition-colors">
+                            <AlertCircle size={15} />
+                          </button>
+                        </>
                       )}
                       <button onClick={() => handleDelete(inv._id)} title="Delete" className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors">
                         <Trash2 size={15} />
@@ -315,6 +379,92 @@ export default function Invoices() {
       {/* View Invoice Modal */}
       <Modal isOpen={!!viewInvoice} title="Invoice Preview" onClose={() => setViewInvoice(null)} size="lg">
         {viewInvoice && <InvoiceView invoice={viewInvoice} onPay={handlePay} payingId={payingId} />}
+      </Modal>
+
+      {/* Refund Modal */}
+      <Modal isOpen={!!refundModal} title="Mark as Refunded" onClose={() => { setRefundModal(null); setRefundAmount(''); }} size="md">
+        {refundModal && (
+          <div className="space-y-4">
+            <div className="bg-blue-50 rounded-lg p-4">
+              <p className="text-sm text-gray-700">
+                Invoice <span className="font-mono font-medium text-blue-600">{refundModal.invoiceNumber}</span> for
+                <span className="font-medium">{refundModal.customerName}</span>
+              </p>
+              <p className="text-lg font-bold text-blue-700 mt-1">USD ${refundModal.total.toFixed(2)}</p>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Refund Amount <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                value={refundAmount}
+                onChange={(e) => setRefundAmount(e.target.value)}
+                min="0.01"
+                step="0.01"
+                max={refundModal.total}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-red-500"
+                placeholder={`Enter amount (max $${refundModal.total.toFixed(2)})`}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Max refund: ${refundModal.total.toFixed(2)}
+              </p>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => { setRefundModal(null); setRefundAmount(''); }} className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50">
+                Cancel
+              </button>
+              <button onClick={() => handleRefund(refundModal)} className="flex-1 bg-red-600 hover:bg-red-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium">
+                Confirm Refund
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Chargeback Modal */}
+      <Modal isOpen={!!chargebackModal} title="Mark as Chargebacked" onClose={() => { setChargebackModal(null); setChargebackAmount(''); }} size="md">
+        {chargebackModal && (
+          <div className="space-y-4">
+            <div className="bg-orange-50 rounded-lg p-4">
+              <p className="text-sm text-gray-700">
+                Invoice <span className="font-mono font-medium text-orange-600">{chargebackModal.invoiceNumber}</span> for
+                <span className="font-medium">{chargebackModal.customerName}</span>
+              </p>
+              <p className="text-lg font-bold text-orange-700 mt-1">USD ${chargebackModal.total.toFixed(2)}</p>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Chargeback Amount <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="number"
+                value={chargebackAmount}
+                onChange={(e) => setChargebackAmount(e.target.value)}
+                min="0.01"
+                step="0.01"
+                max={chargebackModal.total}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500"
+                placeholder={`Enter amount (max $${chargebackModal.total.toFixed(2)})`}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Max chargeback: ${chargebackModal.total.toFixed(2)}
+              </p>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => { setChargebackModal(null); setChargebackAmount(''); }} className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50">
+                Cancel
+              </button>
+              <button onClick={() => handleChargeback(chargebackModal)} className="flex-1 bg-orange-600 hover:bg-orange-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium">
+                Confirm Chargeback
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   );

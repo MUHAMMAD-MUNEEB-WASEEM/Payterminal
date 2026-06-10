@@ -21,3 +21,7 @@ module.exports = {
   // updatedAt: ISO date string
 };
 
+  // status: string ("pending", "paid", "failed", "verified")
+  // refundAmount: number (0 or amount if refunded)
+  // chargebackAmount: number (0 or amount if chargebacked)
+  // paymentOrderRef: string or null
