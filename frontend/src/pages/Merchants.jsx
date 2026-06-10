@@ -113,7 +113,8 @@ export default function Merchants() {
     const icons = {
       stripe: '💳',
       paypal: '🅿️',
-      authorize: '🔐'
+      authorize: '🔐',
+      beyondbancard: '🏦'
     };
     return icons[gateway] || '💰';
   };
@@ -351,6 +352,7 @@ export default function Merchants() {
               <option value="stripe">Stripe</option>
               <option value="paypal">PayPal</option>
               <option value="authorize">Authorize.net</option>
+              <option value="beyondbancard">BeyondBancard</option>
             </select>
           </div>
 
@@ -473,6 +475,75 @@ export default function Merchants() {
                   🧪 Test Credentials
                 </button>
                 <p className="text-xs text-gray-500 mt-1">Test if your API credentials are working</p>
+              </div>
+            </>
+          )}
+
+          {formData.gateway === 'beyondbancard' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                <input
+                  type="text"
+                  value={formData.credentials.apiKey || ''}
+                  onChange={(e) => handleCredentialChange('apiKey', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Your BeyondBancard API Key"
+                />
+                <p className="text-xs text-gray-500 mt-1">Found in your BeyondBancard dashboard under API Settings</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">API Secret</label>
+                <input
+                  type="password"
+                  value={formData.credentials.apiSecret || ''}
+                  onChange={(e) => handleCredentialChange('apiSecret', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="Your BeyondBancard API Secret"
+                />
+                <p className="text-xs text-gray-500 mt-1">Keep this secure. Never share with untrusted parties</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Mode</label>
+                <select
+                  value={formData.credentials.mode || 'sandbox'}
+                  onChange={(e) => handleCredentialChange('mode', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="sandbox">Sandbox (Test)</option>
+                  <option value="live">Live (Production)</option>
+                </select>
+              </div>
+              <div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!formData.credentials.apiKey || !formData.credentials.apiSecret) {
+                      toast.error('Please enter API Key and Secret');
+                      return;
+                    }
+                    
+                    try {
+                      const res = await axios.post('/merchants/test-beyondbancard', {
+                        apiKey: formData.credentials.apiKey,
+                        apiSecret: formData.credentials.apiSecret,
+                        mode: formData.credentials.mode || 'sandbox'
+                      });
+
+                      if (res.data.success) {
+                        toast.success('✅ ' + res.data.message);
+                      } else {
+                        toast.error('❌ ' + res.data.message);
+                      }
+                    } catch (err) {
+                      toast.error(err.response?.data?.message || 'Test failed');
+                    }
+                  }}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                >
+                  🧪 Test Credentials
+                </button>
+                <p className="text-xs text-gray-500 mt-1">Test if your BeyondBancard credentials are working</p>
               </div>
             </>
           )}

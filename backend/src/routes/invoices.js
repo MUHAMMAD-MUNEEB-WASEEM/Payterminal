@@ -164,6 +164,11 @@ router.post('/public/:id/pay', async (req, res) => {
         result = await processAuthorizePayment(merchant.credentials, paymentData);
         break;
       }
+      case 'beyondbancard': {
+        const { processBeyondbancardPayment } = require('../utils/beyondbancard');
+        result = await processBeyondbancardPayment(merchant.credentials, paymentData);
+        break;
+      }
       default:
         return res.status(400).json({ message: 'Unsupported payment gateway' });
     }

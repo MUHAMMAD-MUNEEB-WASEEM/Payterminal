@@ -44,8 +44,8 @@ router.post('/', auth, adminOnly, async (req, res) => {
       return res.status(400).json({ message: 'Nickname and gateway are required' });
     }
     
-    if (!['stripe', 'paypal', 'authorize'].includes(gateway)) {
-      return res.status(400).json({ message: 'Invalid gateway. Must be stripe, paypal, or authorize' });
+    if (!['stripe', 'paypal', 'authorize', 'beyondbancard'].includes(gateway)) {
+      return res.status(400).json({ message: 'Invalid gateway. Must be stripe, paypal, authorize, or beyondbancard' });
     }
     
     const merchant = await db.merchants.insert({
@@ -321,6 +321,36 @@ router.post('/test-authorize', auth, adminOnly, async (req, res) => {
         });
       }
     });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Test BeyondBancard credentials (admin only)
+router.post('/test-beyondbancard', auth, adminOnly, async (req, res) => {
+  try {
+    const { apiKey, apiSecret, mode } = req.body;
+    
+    if (!apiKey || !apiSecret) {
+      return res.status(400).json({ message: 'API Key and Secret are required' });
+    }
+
+    const { testBeyondbancardCredentials } = require('../utils/beyondbancard');
+    const result = await testBeyondbancardCredentials(apiKey, apiSecret, mode || 'sandbox');
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: '✅ ' + result.message,
+        note: 'Your BeyondBancard credentials are valid and working correctly.'
+      });
+    } else {
+      res.json({
+        success: false,
+        message: '❌ ' + result.message,
+        errorCode: result.errorCode
+      });
+    }
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
