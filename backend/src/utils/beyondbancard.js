@@ -1,11 +1,9 @@
 const axios = require('axios');
 
 // BeyondBancard payment processing
-// Assumes API endpoint and authentication as per BeyondBancard documentation
-// Credentials needed: apiKey, apiSecret (or similar auth tokens)
-
-const BEYONDBANCARD_API_ENDPOINT = 'https://api.beyondbancard.com/v1'; // May need to be updated based on actual endpoint
-const BEYONDBANCARD_SANDBOX_ENDPOINT = 'https://sandbox-api.beyondbancard.com/v1'; // Sandbox endpoint
+// API endpoint for BeyondBancard - update based on actual endpoint from BeyondBancard docs
+const BEYONDBANCARD_API_ENDPOINT = 'https://api.beyondbancard.com/api/v1';
+const BEYONDBANCARD_SANDBOX_ENDPOINT = 'https://sandbox.beyondbancard.com/api/v1';
 
 async function processBeyondbancardPayment(credentials, paymentData) {
   try {
@@ -14,6 +12,14 @@ async function processBeyondbancardPayment(credentials, paymentData) {
       return {
         success: false,
         error: 'BeyondBancard API Key and Secret are required'
+      };
+    }
+
+    // Validate card data
+    if (!paymentData.cardNumber || !paymentData.cardHolder || !paymentData.expiryMonth || !paymentData.expiryYear || !paymentData.cvv) {
+      return {
+        success: false,
+        error: 'Card information is incomplete'
       };
     }
 
@@ -28,8 +34,8 @@ async function processBeyondbancardPayment(credentials, paymentData) {
       card: {
         number: paymentData.cardNumber.replace(/\s/g, ''),
         name: paymentData.cardHolder,
-        expiryMonth: paymentData.expiryMonth,
-        expiryYear: paymentData.expiryYear,
+        expiryMonth: String(paymentData.expiryMonth).padStart(2, '0'),
+        expiryYear: String(paymentData.expiryYear),
         cvv: paymentData.cvv
       },
       description: paymentData.description,
@@ -55,19 +61,19 @@ async function processBeyondbancardPayment(credentials, paymentData) {
     const response = await instance.post('/transactions/charge', paymentRequest);
 
     // Handle successful response
-    if (response.data && response.data.success) {
+    if (response.data && (response.data.success || response.data.status === 'completed' || response.data.status === 'approved')) {
       return {
         success: true,
-        transactionId: response.data.transactionId || response.data.id,
+        transactionId: response.data.transactionId || response.data.id || response.data.reference,
         message: 'Payment processed successfully',
-        authCode: response.data.authCode,
+        authCode: response.data.authCode || response.data.auth_code,
         reference: response.data.reference
       };
     } else {
       return {
         success: false,
-        error: response.data?.message || 'Payment processing failed',
-        errorCode: response.data?.errorCode
+        error: response.data?.message || response.data?.error || 'Payment processing failed',
+        errorCode: response.data?.errorCode || response.data?.code
       };
     }
   } catch (error) {
@@ -105,6 +111,15 @@ async function processBeyondbancardPayment(credentials, paymentData) {
         success: false,
         error: errorData.message || 'Payment processing failed',
         errorCode: errorData.errorCode
+      };
+    }
+
+    // Handle network errors
+    if (error.code === 'ENOTFOUND') {
+      return {
+        success: false,
+        error: 'Cannot connect to BeyondBancard API. Please check endpoint URL or try again later.',
+        errorCode: 'NETWORK_ERROR'
       };
     }
 
@@ -155,6 +170,14 @@ async function testBeyondbancardCredentials(apiKey, apiSecret, mode = 'sandbox')
         success: false,
         message: 'Invalid API Key or Secret',
         errorCode: 'AUTH_FAILED'
+      };
+    }
+
+    if (error.code === 'ENOTFOUND') {
+      return {
+        success: false,
+        message: 'Cannot reach BeyondBancard API endpoint. Please verify the endpoint URL is correct.',
+        errorCode: 'ENDPOINT_NOT_FOUND'
       };
     }
 

@@ -121,10 +121,10 @@ export default function PublicInvoice() {
       if (res.data.status === 'paid') {
         toast.success('Payment successful!');
         
-        // Check if brand has redirect URL and redirect is enabled
-        if (invoice.brand?.redirectUrl && invoice.brand?.enableRedirect) {
+        // Check if we should redirect to brand URL
+        if (res.data.redirectUrl && res.data.enableRedirect) {
           setTimeout(() => {
-            window.location.href = invoice.brand.redirectUrl;
+            window.location.href = res.data.redirectUrl;
           }, 2000);
         } else {
           // Stay on success page
@@ -148,7 +148,8 @@ export default function PublicInvoice() {
     const icons = {
       stripe: '💳',
       paypal: '🅿️',
-      authorize: '🔐'
+      authorize: '🔐',
+      beyondbancard: '🏦'
     };
     return icons[gateway] || '💰';
   };
