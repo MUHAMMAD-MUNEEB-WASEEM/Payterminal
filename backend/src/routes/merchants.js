@@ -356,4 +356,56 @@ router.post('/test-beyondbancard', auth, adminOnly, async (req, res) => {
   }
 });
 
+// Debug endpoint to test BeyondBancard payment processor directly (admin only)
+router.post('/debug-beyondbancard-payment', auth, adminOnly, async (req, res) => {
+  try {
+    const { apiKey, apiSecret, mode, amount } = req.body;
+    
+    if (!apiKey || !apiSecret) {
+      return res.status(400).json({ message: 'API Key and Secret are required' });
+    }
+
+    const { processBeyondbancardPayment } = require('../utils/beyondbancard');
+    
+    const testPaymentData = {
+      amount: amount || 1.00,
+      currency: 'USD',
+      cardNumber: '4242424242424242',
+      cardHolder: 'Test User',
+      expiryMonth: '12',
+      expiryYear: '2025',
+      cvv: '123',
+      description: 'Debug Test Payment'
+    };
+
+    const credentials = {
+      apiKey,
+      apiSecret,
+      mode: mode || 'sandbox'
+    };
+
+    console.log('🔍 Debug: Testing BeyondBancard payment processor');
+    console.log('Credentials:', { apiKey: '***', apiSecret: '***', mode });
+    console.log('Payment data:', testPaymentData);
+
+    const result = await processBeyondbancardPayment(credentials, testPaymentData);
+
+    console.log('🔍 Debug: Result:', JSON.stringify(result, null, 2));
+
+    res.json({
+      debug: true,
+      result,
+      testPaymentData,
+      message: result.success ? 'Payment processor test successful' : 'Payment processor test failed'
+    });
+  } catch (err) {
+    console.error('🔍 Debug: Error in payment test:', err);
+    res.status(500).json({ 
+      message: 'Debug test error',
+      error: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
+});
+
 module.exports = router;

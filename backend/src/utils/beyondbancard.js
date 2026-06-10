@@ -1,11 +1,20 @@
 const axios = require('axios');
 
 // BeyondBancard payment processing via Transaction Gateway
-// API endpoint: https://beyondbancard.transactiongateway.com
-// Uses standard transaction gateway REST API
+// Documentation: https://beyondbancard.com
+// The Transaction Gateway API uses REST with Basic Auth
+//
+// Key endpoints:
+// - Sandbox: https://api.sandbox.transactiongateway.com (or similar)
+// - Live: https://beyondbancard.transactiongateway.com (or similar)
+//
+// Note: The exact endpoint may vary. If you get 404 errors:
+// 1. Verify the correct API endpoint with BeyondBancard support
+// 2. Check if the endpoint requires a specific path like /api/v1 or just /
+// 3. Confirm the transaction endpoint is /transactions or /charge or something else
 
 const BEYONDBANCARD_API_ENDPOINT = 'https://beyondbancard.transactiongateway.com/api/v1';
-const BEYONDBANCARD_SANDBOX_ENDPOINT = 'https://api.sandbox.transactiongateway.com/v1';
+const BEYONDBANCARD_SANDBOX_ENDPOINT = 'https://api.sandbox.transactiongateway.com/api/v1';
 
 async function processBeyondbancardPayment(credentials, paymentData) {
   try {
@@ -98,6 +107,7 @@ async function processBeyondbancardPayment(credentials, paymentData) {
     });
 
     // Format payment request for Transaction Gateway
+    // Try a simpler request format first
     const paymentRequest = {
       transaction_type: 'charge',
       payment_method: 'credit_card',
@@ -117,75 +127,237 @@ async function processBeyondbancardPayment(credentials, paymentData) {
     };
 
     console.log('Processing BeyondBancard payment via:', endpoint);
-    const response = await instance.post('/transactions', paymentRequest);
+    console.log('Payment amount:', paymentData.amount, 'Card last 4:', cardNumber.slice(-4));
+    console.log('Request payload:', JSON.stringify(paymentRequest, null, 2));
+    
+    let response;
+    let attemptedEndpoint = '/transactions';
+    let rawError = null;
+    
+    try {
+      // Try the main transactions endpoint
+      response = await instance.post('/transactions', paymentRequest);
+    } catch (err) {
+      rawError = {
+        message: err.message,
+        code: err.code,
+        status: err.response?.status,
+        statusText: err.response?.statusText,
+        data: err.response?.data
+      };
+      
+      console.warn('❌ /transactions endpoint failed:', JSON.stringify(rawError, null, 2));
+      
+      // If /transactions doesn't work, try alternative endpoints
+      if (err.response?.status === 404) {
+        console.warn('⚠️ /transactions returned 404, trying alternatives...');
+        try {
+          response = await instance.post('/charge', paymentRequest);
+          attemptedEndpoint = '/charge';
+          console.log('✅ /charge endpoint worked');
+        } catch (err2) {
+          console.warn('⚠️ /charge also failed:', err2.message);
+          try {
+            response = await instance.post('/', paymentRequest);
+            attemptedEndpoint = '/';
+            console.log('✅ / endpoint worked');
+          } catch (err3) {
+            // All endpoints failed
+            console.error('❌ All endpoints failed. Last error:', JSON.stringify({
+              message: err3.message,
+              status: err3.response?.status,
+              data: err3.response?.data
+            }, null, 2));
+            throw err; // Throw the original error
+          }
+        }
+      } else {
+        // Non-404 error on first attempt
+        console.error('❌ First request failed with non-404 error:', rawError);
+        throw err;
+      }
+    }
 
-    // Handle successful response
-    if (response.data && (response.data.success || response.data.status === 'approved' || response.data.status === 'captured')) {
+    console.log(`✅ Request succeeded on endpoint: ${attemptedEndpoint}`);
+    console.log('BeyondBancard response status:', response.status);
+    console.log('BeyondBancard response data:', JSON.stringify(response.data, null, 2));
+
+    // BeyondBancard Transaction Gateway returns different response formats
+    // We need to check multiple fields to determine success
+    const responseData = response.data || {};
+    
+    // Possible transaction ID fields
+    const transactionId = responseData.transaction_id || 
+                         responseData.id || 
+                         responseData.transactionId ||
+                         responseData.reference_id;
+    
+    // Possible success indicators
+    const successIndicators = [
+      responseData.success === true,
+      responseData.status === 'approved',
+      responseData.status === 'captured',
+      responseData.status === 'success',
+      responseData.result === 'success',
+      (response.status === 200 || response.status === 201) && transactionId
+    ];
+    
+    const isSuccessful = successIndicators.some(x => x);
+
+    if (isSuccessful && transactionId) {
+      console.log('✅ Payment successful! Transaction ID:', transactionId);
       return {
         success: true,
-        transactionId: response.data.transaction_id || response.data.id,
+        transactionId: transactionId,
         message: 'Payment processed successfully',
-        authCode: response.data.authorization_code || response.data.auth_code,
-        reference: response.data.transaction_id
+        authCode: responseData.authorization_code || responseData.auth_code || responseData.authCode,
+        reference: transactionId
       };
-    } else {
+    } else if (responseData.errors && responseData.errors.length > 0) {
+      // API returned errors array
+      const firstError = responseData.errors[0];
+      const errorMsg = firstError.message || firstError.description || 'Payment declined';
+      console.log('❌ Payment error:', errorMsg);
       return {
         success: false,
-        error: response.data?.error_message || response.data?.message || 'Payment processing failed',
-        errorCode: response.data?.error_code
+        error: errorMsg,
+        errorCode: firstError.code
+      };
+    } else if (!isSuccessful) {
+      // Not successful - determine why
+      const errorMsg = responseData.error_message || 
+                      responseData.message || 
+                      responseData.description ||
+                      `Payment was not processed. Status: ${responseData.status}`;
+      console.log('❌ Payment failed:', errorMsg);
+      return {
+        success: false,
+        error: errorMsg,
+        errorCode: responseData.error_code || responseData.code || 'PAYMENT_FAILED'
+      };
+    } else {
+      // We have transaction ID but success not confirmed
+      console.log('⚠️ Ambiguous response - transaction ID present but success not confirmed');
+      return {
+        success: true,
+        transactionId: transactionId,
+        message: 'Payment processed',
+        reference: transactionId
       };
     }
   } catch (error) {
-    console.error('BeyondBancard payment error:', error.message);
+    console.error('\n❌ PAYMENT PROCESSOR ERROR:');
+    console.error('Gateway: BeyondBancard');
+    console.error('Error message:', error.message);
+    console.error('Error code:', error.code);
+    console.error('Error name:', error.name);
+    
+    if (error.response) {
+      console.error('---Response Details---');
+      console.error('Response status:', error.response.status);
+      console.error('Response statusText:', error.response.statusText);
+      console.error('Response data:', JSON.stringify(error.response.data, null, 2));
+    } else if (error.request) {
+      console.error('---Request Made But No Response---');
+      console.error('Request:', error.request);
+    } else {
+      console.error('---Error During Request Setup---');
+      console.error('Error message:', error.message);
+    }
+    console.error('Error stack:', error.stack);
+    console.error('\n');
 
     // Handle specific error responses
     if (error.response) {
-      const errorData = error.response.data;
+      const errorData = error.response.data || {};
       
-      if (error.response.status === 401) {
+      if (error.response.status === 401 || error.response.status === 403) {
         return {
           success: false,
-          error: 'Invalid API credentials',
+          error: 'Invalid API credentials - authentication failed. Please verify your API Key and Secret.',
           errorCode: 'AUTH_FAILED'
         };
       }
 
-      if (error.response.status === 400) {
+      if (error.response.status === 404) {
         return {
           success: false,
-          error: errorData.error_message || 'Invalid payment data',
-          errorCode: errorData.error_code || 'INVALID_DATA'
+          error: 'BeyondBancard API endpoint not found. The endpoint may have changed. Please contact BeyondBancard support or check your endpoint configuration.',
+          errorCode: 'ENDPOINT_NOT_FOUND'
         };
       }
 
-      if (error.response.status === 402 || errorData?.error_code === 'declined') {
+      if (error.response.status === 400) {
+        // 400 means invalid request data - card declined, expired, etc.
         return {
           success: false,
-          error: 'Payment declined - ' + (errorData.error_message || 'Card was declined'),
+          error: errorData.error_message || errorData.message || 'Invalid payment data - ' + (errorData.errors?.[0]?.message || 'please check your card details'),
+          errorCode: errorData.error_code || 'INVALID_REQUEST'
+        };
+      }
+
+      if (error.response.status === 402 || errorData?.error_code === 'declined' || errorData?.status === 'declined') {
+        return {
+          success: false,
+          error: 'Payment declined - ' + (errorData.error_message || errorData.message || 'Your card was declined'),
           errorCode: 'PAYMENT_DECLINED'
         };
       }
 
+      if (error.response.status === 422) {
+        // Unprocessable entity - validation error
+        return {
+          success: false,
+          error: 'Invalid card data - ' + (errorData.error_message || errorData.message || 'Please check your card details'),
+          errorCode: 'VALIDATION_ERROR'
+        };
+      }
+
+      if (error.response.status === 500 || error.response.status === 502 || error.response.status === 503) {
+        return {
+          success: false,
+          error: `BeyondBancard server error (${error.response.status}) - please try again later`,
+          errorCode: 'GATEWAY_ERROR'
+        };
+      }
+
+      // Generic error response
       return {
         success: false,
-        error: errorData.error_message || 'Payment processing failed',
-        errorCode: errorData.error_code
+        error: errorData.error_message || errorData.message || `Payment failed with status ${error.response.status}`,
+        errorCode: errorData.error_code || 'UNKNOWN_ERROR'
       };
     }
 
     // Handle network errors
-    if (error.code === 'ENOTFOUND') {
+    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
       return {
         success: false,
-        error: 'Cannot connect to BeyondBancard API. Please check your connection.',
+        error: 'Cannot reach BeyondBancard API server. Please check your internet connection and the API endpoint configuration.',
         errorCode: 'NETWORK_ERROR'
+      };
+    }
+
+    if (error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET') {
+      return {
+        success: false,
+        error: 'Payment gateway timeout - please try again',
+        errorCode: 'TIMEOUT_ERROR'
+      };
+    }
+
+    if (error.code === 'EAUTHFAILED') {
+      return {
+        success: false,
+        error: 'SSL certificate authentication failed - API endpoint may be invalid',
+        errorCode: 'SSL_ERROR'
       };
     }
 
     return {
       success: false,
       error: error.message || 'Payment processing failed',
-      errorCode: 'PAYMENT_ERROR'
+      errorCode: error.code || 'PAYMENT_ERROR'
     };
   }
 }

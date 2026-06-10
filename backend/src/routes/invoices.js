@@ -148,6 +148,8 @@ router.post('/public/:id/pay', async (req, res) => {
     let result;
 
     // Process payment based on gateway
+    console.log(`Processing payment for invoice ${invoice.invoiceNumber} with merchant gateway: ${merchant.gateway}`);
+    
     switch (merchant.gateway) {
       case 'stripe': {
         const { processStripePayment } = require('../utils/stripe');
@@ -165,13 +167,17 @@ router.post('/public/:id/pay', async (req, res) => {
         break;
       }
       case 'beyondbancard': {
+        console.log('🔷 Using BeyondBancard payment processor');
         const { processBeyondbancardPayment } = require('../utils/beyondbancard');
         result = await processBeyondbancardPayment(merchant.credentials, paymentData);
         break;
       }
       default:
-        return res.status(400).json({ message: 'Unsupported payment gateway' });
+        console.error('❌ Unsupported gateway:', merchant.gateway);
+        return res.status(400).json({ message: 'Unsupported payment gateway: ' + merchant.gateway });
     }
+    
+    console.log(`Payment processing result:`, JSON.stringify(result, null, 2));
 
     if (result.success) {
       // Update merchant processed amount
@@ -240,13 +246,24 @@ router.post('/public/:id/pay', async (req, res) => {
         }
       );
       
+      console.log('Payment failed - Result:', JSON.stringify(result, null, 2));
       res.status(400).json({ 
-        message: result.error || 'Payment failed' 
+        status: 'failed',
+        message: result.error || 'Payment failed',
+        errorCode: result.errorCode,
+        debug: process.env.NODE_ENV === 'development' ? result : undefined
       });
     }
   } catch (err) {
-    console.error('Payment error:', err.message);
-    res.status(500).json({ message: err.message || 'Payment processing failed' });
+    console.error('🔴 Payment endpoint error:', err);
+    console.error('Error message:', err.message);
+    console.error('Error stack:', err.stack);
+    
+    res.status(500).json({ 
+      status: 'error',
+      message: err.message || 'Payment processing failed',
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 

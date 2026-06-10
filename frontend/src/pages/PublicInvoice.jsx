@@ -116,28 +116,42 @@ export default function PublicInvoice() {
         cvv: cardData.cvv,
         merchantId: selectedMerchant._id,
       };
+      
+      console.log('=== PAYMENT REQUEST ===');
+      console.log('Merchant:', selectedMerchant.nickname, `(${selectedMerchant.gateway})`);
+      console.log('Card last 4:', payload.cardNumber.slice(-4));
+      console.log('Cardholder:', payload.cardHolder);
+      console.log('Expiry:', `${payload.expiryMonth}/${payload.expiryYear}`);
+      console.log('Amount:', invoice.total);
+      
       const res = await api.post(`/invoices/public/${invoiceId}/pay`, payload);
       
-      console.log('Payment response:', res.data);
+      console.log('=== PAYMENT RESPONSE ===');
+      console.log('Status:', res.data.status);
+      console.log('Message:', res.data.message);
+      console.log('Transaction ID:', res.data.transactionId);
+      console.log('Redirect URL:', res.data.redirectUrl);
+      console.log('Enable Redirect:', res.data.enableRedirect);
+      console.log('Full response:', res.data);
       
       if (res.data.status === 'paid') {
         toast.success('Payment successful!');
         
-        console.log('Redirect check:', {
-          redirectUrl: res.data.redirectUrl,
-          enableRedirect: res.data.enableRedirect,
-          shouldRedirect: res.data.redirectUrl && res.data.enableRedirect
-        });
+        console.log('=== REDIRECT CHECK ===');
+        console.log('Redirect URL exists:', !!res.data.redirectUrl);
+        console.log('Enable Redirect:', res.data.enableRedirect === true);
+        console.log('Should redirect:', res.data.redirectUrl && res.data.enableRedirect === true);
         
         // Check if we should redirect to brand URL
         if (res.data.redirectUrl && res.data.enableRedirect === true) {
-          console.log('Redirecting to:', res.data.redirectUrl);
+          console.log('✅ Redirecting to:', res.data.redirectUrl);
           setTimeout(() => {
             window.location.href = res.data.redirectUrl;
           }, 2000);
         } else {
           // Stay on success page
-          console.log('No redirect - showing success page');
+          console.log('❌ No redirect - showing success page');
+          console.log('  Reason: ' + (!res.data.redirectUrl ? 'No redirectUrl' : 'enableRedirect not true'));
           setTimeout(() => {
             setStep('success');
           }, 1000);
@@ -148,6 +162,9 @@ export default function PublicInvoice() {
         toast.error('Payment failed. Please try again.');
       }
     } catch (err) {
+      console.error('=== PAYMENT ERROR ===');
+      console.error('Error:', err);
+      console.error('Response:', err.response?.data);
       toast.error(err.response?.data?.message || 'Payment failed');
     } finally {
       setPaying(false);
