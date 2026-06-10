@@ -1,9 +1,11 @@
 const axios = require('axios');
 
-// BeyondBancard payment processing
-// API endpoint for BeyondBancard - update based on actual endpoint from BeyondBancard docs
-const BEYONDBANCARD_API_ENDPOINT = 'https://api.beyondbancard.com/api/v1';
-const BEYONDBANCARD_SANDBOX_ENDPOINT = 'https://sandbox.beyondbancard.com/api/v1';
+// BeyondBancard payment processing via Transaction Gateway
+// API endpoint: https://beyondbancard.transactiongateway.com
+// Uses standard transaction gateway REST API
+
+const BEYONDBANCARD_API_ENDPOINT = 'https://beyondbancard.transactiongateway.com/api/v1';
+const BEYONDBANCARD_SANDBOX_ENDPOINT = 'https://api.sandbox.transactiongateway.com/v1';
 
 async function processBeyondbancardPayment(credentials, paymentData) {
   try {
@@ -15,7 +17,7 @@ async function processBeyondbancardPayment(credentials, paymentData) {
       };
     }
 
-    // Validate card data
+    // Validate card data - STRICT VALIDATION
     if (!paymentData.cardNumber || !paymentData.cardHolder || !paymentData.expiryMonth || !paymentData.expiryYear || !paymentData.cvv) {
       return {
         success: false,
@@ -23,57 +25,114 @@ async function processBeyondbancardPayment(credentials, paymentData) {
       };
     }
 
+    // Validate card format
+    const cardNumber = paymentData.cardNumber.replace(/\s/g, '');
+    const cvv = paymentData.cvv.trim();
+    const expiryMonth = String(paymentData.expiryMonth).padStart(2, '0');
+    const expiryYear = String(paymentData.expiryYear);
+
+    // Validate card number (must be 13-19 digits)
+    if (!/^\d{13,19}$/.test(cardNumber)) {
+      return {
+        success: false,
+        error: 'Invalid card number format'
+      };
+    }
+
+    // Validate CVV (3-4 digits)
+    if (!/^\d{3,4}$/.test(cvv)) {
+      return {
+        success: false,
+        error: 'Invalid CVV'
+      };
+    }
+
+    // Validate expiry month (01-12)
+    if (!/^(0[1-9]|1[0-2])$/.test(expiryMonth)) {
+      return {
+        success: false,
+        error: 'Invalid expiry month'
+      };
+    }
+
+    // Validate expiry year (current or future)
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+    const year = parseInt(expiryYear);
+    
+    if (year < currentYear || (year === currentYear && parseInt(expiryMonth) < currentMonth)) {
+      return {
+        success: false,
+        error: 'Card has expired'
+      };
+    }
+
+    // Luhn algorithm validation for card number
+    if (!luhnCheck(cardNumber)) {
+      return {
+        success: false,
+        error: 'Invalid card number',
+        errorCode: 'INVALID_CARD'
+      };
+    }
+
     const endpoint = credentials.mode === 'live' 
       ? BEYONDBANCARD_API_ENDPOINT 
       : BEYONDBANCARD_SANDBOX_ENDPOINT;
 
-    // Format payment request
-    const paymentRequest = {
-      amount: Math.round(paymentData.amount * 100), // Convert to cents
-      currency: paymentData.currency || 'USD',
-      card: {
-        number: paymentData.cardNumber.replace(/\s/g, ''),
-        name: paymentData.cardHolder,
-        expiryMonth: String(paymentData.expiryMonth).padStart(2, '0'),
-        expiryYear: String(paymentData.expiryYear),
-        cvv: paymentData.cvv
-      },
-      description: paymentData.description,
-      reference: `TXN-${Date.now()}`,
-      metadata: {
-        integration: 'PayTerminal'
-      }
+    // Create axios instance with authentication
+    // Transaction Gateway uses Basic Auth with API Key and Secret
+    const auth = {
+      username: credentials.apiKey,
+      password: credentials.apiSecret
     };
 
-    // Create axios instance with authentication
     const instance = axios.create({
       baseURL: endpoint,
+      auth: auth,
       headers: {
-        'Authorization': `Bearer ${credentials.apiKey}`,
-        'X-API-Secret': credentials.apiSecret,
         'Content-Type': 'application/json',
         'User-Agent': 'PayTerminal/1.0'
       },
       timeout: 30000
     });
 
-    // Process payment
-    const response = await instance.post('/transactions/charge', paymentRequest);
+    // Format payment request for Transaction Gateway
+    const paymentRequest = {
+      transaction_type: 'charge',
+      payment_method: 'credit_card',
+      amount: Math.round(paymentData.amount * 100), // Amount in cents
+      currency: paymentData.currency || 'USD',
+      credit_card: {
+        card_number: cardNumber,
+        cardholder_name: paymentData.cardHolder,
+        expiration_month: expiryMonth,
+        expiration_year: expiryYear,
+        cvv: cvv
+      },
+      order: {
+        invoice_number: paymentData.description,
+        description: paymentData.description
+      }
+    };
+
+    console.log('Processing BeyondBancard payment via:', endpoint);
+    const response = await instance.post('/transactions', paymentRequest);
 
     // Handle successful response
-    if (response.data && (response.data.success || response.data.status === 'completed' || response.data.status === 'approved')) {
+    if (response.data && (response.data.success || response.data.status === 'approved' || response.data.status === 'captured')) {
       return {
         success: true,
-        transactionId: response.data.transactionId || response.data.id || response.data.reference,
+        transactionId: response.data.transaction_id || response.data.id,
         message: 'Payment processed successfully',
-        authCode: response.data.authCode || response.data.auth_code,
-        reference: response.data.reference
+        authCode: response.data.authorization_code || response.data.auth_code,
+        reference: response.data.transaction_id
       };
     } else {
       return {
         success: false,
-        error: response.data?.message || response.data?.error || 'Payment processing failed',
-        errorCode: response.data?.errorCode || response.data?.code
+        error: response.data?.error_message || response.data?.message || 'Payment processing failed',
+        errorCode: response.data?.error_code
       };
     }
   } catch (error) {
@@ -94,23 +153,23 @@ async function processBeyondbancardPayment(credentials, paymentData) {
       if (error.response.status === 400) {
         return {
           success: false,
-          error: errorData.message || 'Invalid payment data',
-          errorCode: errorData.errorCode || 'INVALID_DATA'
+          error: errorData.error_message || 'Invalid payment data',
+          errorCode: errorData.error_code || 'INVALID_DATA'
         };
       }
 
-      if (error.response.status === 402) {
+      if (error.response.status === 402 || errorData?.error_code === 'declined') {
         return {
           success: false,
-          error: 'Payment declined',
-          errorCode: errorData.errorCode || 'PAYMENT_DECLINED'
+          error: 'Payment declined - ' + (errorData.error_message || 'Card was declined'),
+          errorCode: 'PAYMENT_DECLINED'
         };
       }
 
       return {
         success: false,
-        error: errorData.message || 'Payment processing failed',
-        errorCode: errorData.errorCode
+        error: errorData.error_message || 'Payment processing failed',
+        errorCode: errorData.error_code
       };
     }
 
@@ -118,7 +177,7 @@ async function processBeyondbancardPayment(credentials, paymentData) {
     if (error.code === 'ENOTFOUND') {
       return {
         success: false,
-        error: 'Cannot connect to BeyondBancard API. Please check endpoint URL or try again later.',
+        error: 'Cannot connect to BeyondBancard API. Please check your connection.',
         errorCode: 'NETWORK_ERROR'
       };
     }
@@ -126,32 +185,67 @@ async function processBeyondbancardPayment(credentials, paymentData) {
     return {
       success: false,
       error: error.message || 'Payment processing failed',
-      errorCode: 'NETWORK_ERROR'
+      errorCode: 'PAYMENT_ERROR'
     };
   }
+}
+
+// Luhn algorithm to validate card number
+function luhnCheck(cardNumber) {
+  let sum = 0;
+  let isEven = false;
+
+  for (let i = cardNumber.length - 1; i >= 0; i--) {
+    let digit = parseInt(cardNumber.charAt(i), 10);
+
+    if (isEven) {
+      digit *= 2;
+      if (digit > 9) {
+        digit -= 9;
+      }
+    }
+
+    sum += digit;
+    isEven = !isEven;
+  }
+
+  return sum % 10 === 0;
 }
 
 // Test BeyondBancard credentials
 async function testBeyondbancardCredentials(apiKey, apiSecret, mode = 'sandbox') {
   try {
+    if (!apiKey || !apiSecret) {
+      return {
+        success: false,
+        message: 'API Key and Secret are required'
+      };
+    }
+
     const endpoint = mode === 'live'
       ? BEYONDBANCARD_API_ENDPOINT
       : BEYONDBANCARD_SANDBOX_ENDPOINT;
 
+    const auth = {
+      username: apiKey,
+      password: apiSecret
+    };
+
     const instance = axios.create({
       baseURL: endpoint,
+      auth: auth,
       headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'X-API-Secret': apiSecret,
         'Content-Type': 'application/json'
       },
       timeout: 10000
     });
 
-    // Test connection with a simple API call
-    const response = await instance.get('/account/verify');
+    console.log('Testing BeyondBancard credentials at:', endpoint);
+    
+    // Test with a simple status check or validation call
+    const response = await instance.get('/account');
 
-    if (response.status === 200) {
+    if (response.status === 200 || response.data.success) {
       return {
         success: true,
         message: 'Credentials are valid'
@@ -165,7 +259,7 @@ async function testBeyondbancardCredentials(apiKey, apiSecret, mode = 'sandbox')
   } catch (error) {
     console.error('BeyondBancard credential test error:', error.message);
     
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 || error.response?.status === 403) {
       return {
         success: false,
         message: 'Invalid API Key or Secret',
@@ -173,10 +267,10 @@ async function testBeyondbancardCredentials(apiKey, apiSecret, mode = 'sandbox')
       };
     }
 
-    if (error.code === 'ENOTFOUND') {
+    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
       return {
         success: false,
-        message: 'Cannot reach BeyondBancard API endpoint. Please verify the endpoint URL is correct.',
+        message: 'Cannot reach BeyondBancard API at ' + BEYONDBANCARD_API_ENDPOINT + '. Please verify your credentials and try again.',
         errorCode: 'ENDPOINT_NOT_FOUND'
       };
     }
