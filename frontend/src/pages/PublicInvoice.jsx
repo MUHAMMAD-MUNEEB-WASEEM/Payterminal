@@ -118,16 +118,26 @@ export default function PublicInvoice() {
       };
       const res = await api.post(`/invoices/public/${invoiceId}/pay`, payload);
       
+      console.log('Payment response:', res.data);
+      
       if (res.data.status === 'paid') {
         toast.success('Payment successful!');
         
+        console.log('Redirect check:', {
+          redirectUrl: res.data.redirectUrl,
+          enableRedirect: res.data.enableRedirect,
+          shouldRedirect: res.data.redirectUrl && res.data.enableRedirect
+        });
+        
         // Check if we should redirect to brand URL
-        if (res.data.redirectUrl && res.data.enableRedirect) {
+        if (res.data.redirectUrl && res.data.enableRedirect === true) {
+          console.log('Redirecting to:', res.data.redirectUrl);
           setTimeout(() => {
             window.location.href = res.data.redirectUrl;
           }, 2000);
         } else {
           // Stay on success page
+          console.log('No redirect - showing success page');
           setTimeout(() => {
             setStep('success');
           }, 1000);

@@ -214,12 +214,19 @@ router.post('/public/:id/pay', async (req, res) => {
       const updatedInvoice = await db.invoices.findOne({ _id: invoice._id });
       const brand = updatedInvoice.brandId ? await db.brands.findOne({ _id: updatedInvoice.brandId }) : null;
       
+      console.log('Payment successful - Brand redirect check:', {
+        hasBrand: !!brand,
+        enableRedirect: brand?.enableRedirect,
+        redirectUrl: brand?.redirectUrl
+      });
+      
       res.json({ 
         status: 'paid', 
         message: result.message || 'Payment successful',
         transactionId: result.transactionId,
-        redirectUrl: (brand && brand.enableRedirect) ? brand.redirectUrl : null,
-        enableRedirect: brand ? brand.enableRedirect : false
+        redirectUrl: (brand && brand.enableRedirect && brand.redirectUrl) ? brand.redirectUrl : null,
+        enableRedirect: (brand && brand.enableRedirect) ? true : false,
+        brand: brand ? { name: brand.name, redirectUrl: brand.redirectUrl, enableRedirect: brand.enableRedirect } : null
       });
     } else {
       // Update invoice status to failed
