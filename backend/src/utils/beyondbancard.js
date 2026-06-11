@@ -1,6 +1,20 @@
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 
-// BeyondBancard payment processing via Transaction Gateway
+// Create logs directory if it doesn't exist
+const logsDir = path.join(__dirname, '../../logs');
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
+}
+
+// Function to log to file
+function logToFile(message) {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] ${message}\n`;
+  fs.appendFileSync(path.join(logsDir, 'beyondbancard.log'), logMessage);
+  console.log(message); // Also log to console
+}
 // Documentation: https://beyondbancard.com
 // The Transaction Gateway API uses REST with Basic Auth
 //
@@ -130,6 +144,12 @@ async function processBeyondbancardPayment(credentials, paymentData) {
     console.log('Payment amount:', paymentData.amount, 'Card last 4:', cardNumber.slice(-4));
     console.log('Request payload:', JSON.stringify(paymentRequest, null, 2));
     
+    logToFile('=== PAYMENT REQUEST ===');
+    logToFile('Endpoint: ' + endpoint);
+    logToFile('Amount: ' + paymentData.amount);
+    logToFile('Card last 4: ' + cardNumber.slice(-4));
+    logToFile('Request: ' + JSON.stringify(paymentRequest, null, 2));
+    
     let response;
     let attemptedEndpoint = '/transactions';
     let rawError = null;
@@ -206,6 +226,8 @@ async function processBeyondbancardPayment(credentials, paymentData) {
 
     if (isSuccessful && transactionId) {
       console.log('✅ Payment successful! Transaction ID:', transactionId);
+      logToFile('✅ PAYMENT SUCCESSFUL');
+      logToFile('Transaction ID: ' + transactionId);
       return {
         success: true,
         transactionId: transactionId,
@@ -218,6 +240,9 @@ async function processBeyondbancardPayment(credentials, paymentData) {
       const firstError = responseData.errors[0];
       const errorMsg = firstError.message || firstError.description || 'Payment declined';
       console.log('❌ Payment error:', errorMsg);
+      logToFile('❌ PAYMENT ERROR (errors array):');
+      logToFile('Error: ' + errorMsg);
+      logToFile('Error code: ' + firstError.code);
       return {
         success: false,
         error: errorMsg,
@@ -230,6 +255,9 @@ async function processBeyondbancardPayment(credentials, paymentData) {
                       responseData.description ||
                       `Payment was not processed. Status: ${responseData.status}`;
       console.log('❌ Payment failed:', errorMsg);
+      logToFile('❌ PAYMENT FAILED:');
+      logToFile('Error: ' + errorMsg);
+      logToFile('Response data: ' + JSON.stringify(responseData, null, 2));
       return {
         success: false,
         error: errorMsg,
@@ -238,6 +266,8 @@ async function processBeyondbancardPayment(credentials, paymentData) {
     } else {
       // We have transaction ID but success not confirmed
       console.log('⚠️ Ambiguous response - transaction ID present but success not confirmed');
+      logToFile('⚠️ AMBIGUOUS RESPONSE:');
+      logToFile('Transaction ID: ' + transactionId);
       return {
         success: true,
         transactionId: transactionId,
@@ -252,20 +282,35 @@ async function processBeyondbancardPayment(credentials, paymentData) {
     console.error('Error code:', error.code);
     console.error('Error name:', error.name);
     
+    logToFile('');
+    logToFile('❌ PAYMENT PROCESSOR ERROR:');
+    logToFile('Error message: ' + error.message);
+    logToFile('Error code: ' + error.code);
+    logToFile('Error name: ' + error.name);
+    
     if (error.response) {
       console.error('---Response Details---');
       console.error('Response status:', error.response.status);
       console.error('Response statusText:', error.response.statusText);
       console.error('Response data:', JSON.stringify(error.response.data, null, 2));
+      
+      logToFile('---Response Details---');
+      logToFile('Status: ' + error.response.status);
+      logToFile('StatusText: ' + error.response.statusText);
+      logToFile('Data: ' + JSON.stringify(error.response.data, null, 2));
     } else if (error.request) {
       console.error('---Request Made But No Response---');
       console.error('Request:', error.request);
+      logToFile('---Request Made But No Response---');
     } else {
       console.error('---Error During Request Setup---');
       console.error('Error message:', error.message);
+      logToFile('---Error During Request Setup---');
+      logToFile('Message: ' + error.message);
     }
     console.error('Error stack:', error.stack);
     console.error('\n');
+    logToFile('');
 
     // Handle specific error responses
     if (error.response) {

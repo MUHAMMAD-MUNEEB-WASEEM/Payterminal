@@ -116,11 +116,40 @@ router.post('/public/:id/verify', async (req, res) => {
   }
 });
 
+// Helper function for payment logging
+function createPaymentLogger() {
+  const fs = require('fs');
+  const path = require('path');
+  
+  // Create logs directory
+  const logsDir = path.join(__dirname, '../..', 'logs');
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
+  
+  return function logToFile(msg) {
+    const timestamp = new Date().toISOString();
+    try {
+      fs.appendFileSync(path.join(logsDir, 'payment-route.log'), `[${timestamp}] ${msg}\n`);
+      console.log(msg);
+    } catch (e) {
+      console.error('Failed to log to file:', e.message);
+      console.log(msg); // at least log to console
+    }
+  };
+}
+
 // Public payment endpoint (no auth required)
 router.post('/public/:id/pay', async (req, res) => {
+  const logToFile = createPaymentLogger();
+  logToFile('=== PAYMENT ROUTE HIT ===');
+  
   try {
+    logToFile('Getting payment data...');
     const { cardNumber, cardHolder, expiryMonth, expiryYear, cvv, merchantId } = req.body;
     const invoice = await db.invoices.findOne({ _id: req.params.id });
+    
+    logToFile(`Invoice found: ${!!invoice}, Invoice ID: ${req.params.id}`);
     
     if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
     if (invoice.status === 'paid') return res.status(400).json({ message: 'Invoice already paid' });
@@ -130,6 +159,8 @@ router.post('/public/:id/pay', async (req, res) => {
     if (!merchantId) return res.status(400).json({ message: 'Payment method is required' });
     
     const merchant = await db.merchants.findOne({ _id: merchantId });
+    logToFile(`Merchant found: ${!!merchant}, Merchant ID: ${merchantId}, Gateway: ${merchant?.gateway}`);
+    
     if (!merchant) return res.status(404).json({ message: 'Payment method not found' });
     if (!merchant.isActive) return res.status(400).json({ message: 'Payment method is not active' });
 
@@ -148,35 +179,39 @@ router.post('/public/:id/pay', async (req, res) => {
     let result;
 
     // Process payment based on gateway
-    console.log(`Processing payment for invoice ${invoice.invoiceNumber} with merchant gateway: ${merchant.gateway}`);
+    logToFile(`Processing payment for invoice ${invoice.invoiceNumber} with merchant gateway: ${merchant.gateway}`);
     
     switch (merchant.gateway) {
       case 'stripe': {
+        logToFile('Using Stripe payment processor');
         const { processStripePayment } = require('../utils/stripe');
         result = await processStripePayment(merchant.credentials, paymentData);
         break;
       }
       case 'paypal': {
+        logToFile('Using PayPal payment processor');
         const { processPayPalPayment } = require('../utils/paypal');
         result = await processPayPalPayment(merchant.credentials, paymentData);
         break;
       }
       case 'authorize': {
+        logToFile('Using Authorize.net payment processor');
         const { processAuthorizePayment } = require('../utils/authorize');
         result = await processAuthorizePayment(merchant.credentials, paymentData);
         break;
       }
       case 'beyondbancard': {
-        console.log('🔷 Using BeyondBancard payment processor');
+        logToFile('🔷 Using BeyondBancard payment processor');
         const { processBeyondbancardPayment } = require('../utils/beyondbancard');
         result = await processBeyondbancardPayment(merchant.credentials, paymentData);
         break;
       }
       default:
-        console.error('❌ Unsupported gateway:', merchant.gateway);
+        logToFile(`❌ Unsupported gateway: ${merchant.gateway}`);
         return res.status(400).json({ message: 'Unsupported payment gateway: ' + merchant.gateway });
     }
     
+    logToFile(`Payment processing result: ${JSON.stringify(result)}`);
     console.log(`Payment processing result:`, JSON.stringify(result, null, 2));
 
     if (result.success) {
