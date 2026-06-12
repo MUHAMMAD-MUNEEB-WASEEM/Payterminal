@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import toast from 'react-hot-toast';
@@ -11,9 +11,12 @@ export default function PublicInvoice() {
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState('verify'); // 'verify' | 'payment' | 'success'
   const [merchants, setMerchants] = useState([]);
+  const collectJsRef = useRef(null);
   
   // Create API instance with correct base URL
-  const api = axios.create({ baseURL: `${getApiBaseUrl()}/api` });const [selectedMerchant, setSelectedMerchant] = useState(null);
+  const api = axios.create({ baseURL: `${getApiBaseUrl()}/api` });
+  
+  const [selectedMerchant, setSelectedMerchant] = useState(null);
   
   // Verification form
   const [verifyData, setVerifyData] = useState({
@@ -32,6 +35,7 @@ export default function PublicInvoice() {
     cvv: '',
   });
   const [paying, setPaying] = useState(false);
+  const [collectJsReady, setCollectJsReady] = useState(false);
 
   useEffect(() => {
     const fetchInvoice = async () => {
@@ -59,6 +63,85 @@ export default function PublicInvoice() {
     };
     fetchInvoice();
   }, [invoiceId]);
+
+  // Note: Collect.js loading removed - using raw card data instead
+  // This avoids CDN dependency issues
+
+  const handleCollectJsResponse = (response) => {
+    console.log('📥 Collect.js Response:', response);
+    
+    if (response.token) {
+      console.log('✅ Collect.js token received:', response.token.substring(0, 20) + '...');
+      console.log('📊 Card info:', {
+        last4: response.card?.number?.slice(-4),
+        type: response.card?.type,
+        exp: response.card?.exp
+      });
+      // Token is ready, proceed with payment
+      handlePaymentWithToken(response.token);
+    } else if (response.error) {
+      console.error('❌ Collect.js error:', response.error);
+      setPaying(false);
+      toast.error('Card tokenization failed: ' + response.error);
+    } else {
+      console.error('❌ Collect.js unexpected response:', response);
+      setPaying(false);
+      toast.error('Card tokenization failed: Unexpected response from payment system');
+    }
+  };
+
+  const handlePaymentWithToken = async (token) => {
+    if (!selectedMerchant) {
+      return toast.error('Please select a payment method');
+    }
+    
+    setPaying(true);
+    try {
+      const payload = {
+        token: token, // Send token instead of raw card data
+        cardHolder: cardData.cardHolder,
+        merchantId: selectedMerchant._id,
+      };
+      
+      console.log('=== PAYMENT REQUEST (WITH TOKEN) ===');
+      console.log('Merchant:', selectedMerchant.nickname, `(${selectedMerchant.gateway})`);
+      console.log('Cardholder:', payload.cardHolder);
+      console.log('Amount:', invoice.total);
+      console.log('Token:', token);
+      
+      const res = await api.post(`/invoices/public/${invoiceId}/pay`, payload);
+      
+      console.log('=== PAYMENT RESPONSE ===');
+      console.log('Status:', res.data.status);
+      console.log('Message:', res.data.message);
+      
+      if (res.data.status === 'paid') {
+        toast.success('Payment successful!');
+        
+        if (res.data.redirectUrl && res.data.enableRedirect === true) {
+          console.log('✅ Redirecting to:', res.data.redirectUrl);
+          setTimeout(() => {
+            window.location.href = res.data.redirectUrl;
+          }, 2000);
+        } else {
+          setTimeout(() => {
+            setStep('success');
+          }, 1000);
+        }
+      } else if (res.data.redirect3DS) {
+        window.location.href = res.data.redirect3DS;
+      } else {
+        toast.error('Payment failed. Please try again.');
+      }
+    } catch (err) {
+      console.error('=== PAYMENT ERROR ===');
+      console.error('Error:', err);
+      console.error('Response:', err.response?.data);
+      toast.error(err.response?.data?.message || 'Payment failed');
+    } finally {
+      setPaying(false);
+    }
+  };
 
   const handleVerify = async (e) => {
     e.preventDefault();
@@ -106,6 +189,64 @@ export default function PublicInvoice() {
       return toast.error('Please select a payment method');
     }
     
+    // For BeyondBancard: Skip Collect.js, use raw card data
+    // This works without needing the CDN
+    if (selectedMerchant.gateway === 'beyondbancard') {
+      console.log('🔷 Processing BeyondBancard payment with raw card data...');
+      setPaying(true);
+      
+      try {
+        const payload = {
+          cardNumber: cardData.cardNumber.replace(/\s/g, ''),
+          cardHolder: cardData.cardHolder,
+          expiryMonth: cardData.expiryMonth,
+          expiryYear: cardData.expiryYear,
+          cvv: cardData.cvv,
+          merchantId: selectedMerchant._id,
+        };
+        
+        console.log('=== PAYMENT REQUEST (RAW CARD) ===');
+        console.log('Merchant:', selectedMerchant.nickname, `(${selectedMerchant.gateway})`);
+        console.log('Cardholder:', payload.cardHolder);
+        console.log('Amount:', invoice.total);
+        console.log('Card last 4:', payload.cardNumber.slice(-4));
+        
+        const res = await api.post(`/invoices/public/${invoiceId}/pay`, payload);
+        
+        console.log('=== PAYMENT RESPONSE ===');
+        console.log('Status:', res.data.status);
+        console.log('Message:', res.data.message);
+        
+        if (res.data.status === 'paid') {
+          toast.success('Payment successful!');
+          
+          if (res.data.redirectUrl && res.data.enableRedirect === true) {
+            console.log('✅ Redirecting to:', res.data.redirectUrl);
+            setTimeout(() => {
+              window.location.href = res.data.redirectUrl;
+            }, 2000);
+          } else {
+            setTimeout(() => {
+              setStep('success');
+            }, 1000);
+          }
+        } else if (res.data.redirect3DS) {
+          window.location.href = res.data.redirect3DS;
+        } else {
+          toast.error('Payment failed. Please try again.');
+        }
+      } catch (err) {
+        console.error('=== PAYMENT ERROR ===');
+        console.error('Error:', err);
+        console.error('Response:', err.response?.data);
+        toast.error(err.response?.data?.message || 'Payment failed');
+      } finally {
+        setPaying(false);
+      }
+      return;
+    }
+    
+    // For other gateways, send raw card data
     setPaying(true);
     try {
       const payload = {

@@ -141,6 +141,8 @@ router.get('/brand/:brandId/public', async (req, res) => {
             nickname: merchant.nickname,
             gateway: merchant.gateway,
             isDefault: bm.isDefault || false,
+            // Include tokenization key for frontend (safe to expose - it's public)
+            tokenizationKey: merchant.credentials?.tokenizationKey || null,
           });
         }
       }

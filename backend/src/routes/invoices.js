@@ -142,27 +142,63 @@ function createPaymentLogger() {
 // Public payment endpoint (no auth required)
 router.post('/public/:id/pay', async (req, res) => {
   const logToFile = createPaymentLogger();
-  logToFile('=== PAYMENT ROUTE HIT ===');
   
   try {
-    logToFile('Getting payment data...');
+    console.log('\n========== PAYMENT REQUEST RECEIVED ==========');
+    logToFile('\n========== PAYMENT REQUEST RECEIVED ==========');
+    
+    // Get request data
     const { cardNumber, cardHolder, expiryMonth, expiryYear, cvv, merchantId } = req.body;
+    
+    console.log('Request data received:', {
+      hasCardNumber: !!cardNumber,
+      cardHolder,
+      expiryMonth,
+      expiryYear,
+      hasCvv: !!cvv,
+      merchantId
+    });
+    logToFile(`Request: cardHolder=${cardHolder}, expiryMonth=${expiryMonth}, expiryYear=${expiryYear}, merchantId=${merchantId}`);
+    
+    // Get invoice
     const invoice = await db.invoices.findOne({ _id: req.params.id });
+    console.log(`Invoice lookup: found=${!!invoice}, id=${req.params.id}`);
+    logToFile(`Invoice lookup: found=${!!invoice}, id=${req.params.id}`);
     
-    logToFile(`Invoice found: ${!!invoice}, Invoice ID: ${req.params.id}`);
+    if (!invoice) {
+      console.log('ERROR: Invoice not found');
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
     
-    if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
-    if (invoice.status === 'paid') return res.status(400).json({ message: 'Invoice already paid' });
-    if (!invoice.customerVerified) return res.status(400).json({ message: 'Customer verification required' });
+    if (invoice.status === 'paid') {
+      console.log('ERROR: Invoice already paid');
+      return res.status(400).json({ message: 'Invoice already paid' });
+    }
+    
+    if (!invoice.customerVerified) {
+      console.log('ERROR: Customer not verified');
+      return res.status(400).json({ message: 'Customer verification required' });
+    }
 
-    // Get selected merchant
-    if (!merchantId) return res.status(400).json({ message: 'Payment method is required' });
+    // Validate merchant
+    if (!merchantId) {
+      console.log('ERROR: No merchantId provided');
+      return res.status(400).json({ message: 'Payment method is required' });
+    }
     
     const merchant = await db.merchants.findOne({ _id: merchantId });
-    logToFile(`Merchant found: ${!!merchant}, Merchant ID: ${merchantId}, Gateway: ${merchant?.gateway}`);
+    console.log(`Merchant lookup: found=${!!merchant}, gateway=${merchant?.gateway}`);
+    logToFile(`Merchant lookup: found=${!!merchant}, gateway=${merchant?.gateway}`);
     
-    if (!merchant) return res.status(404).json({ message: 'Payment method not found' });
-    if (!merchant.isActive) return res.status(400).json({ message: 'Payment method is not active' });
+    if (!merchant) {
+      console.log('ERROR: Merchant not found');
+      return res.status(404).json({ message: 'Payment method not found' });
+    }
+    
+    if (!merchant.isActive) {
+      console.log('ERROR: Merchant not active');
+      return res.status(400).json({ message: 'Payment method is not active' });
+    }
 
     // Prepare payment data
     const paymentData = {
@@ -170,72 +206,101 @@ router.post('/public/:id/pay', async (req, res) => {
       currency: 'USD',
       cardNumber,
       cardHolder,
-      expiryMonth,
-      expiryYear,
+      expiryMonth: String(expiryMonth),
+      expiryYear: String(expiryYear),
       cvv,
       description: `Invoice ${invoice.invoiceNumber}`,
     };
+    
+    console.log('Payment data prepared:', {
+      amount: paymentData.amount,
+      currency: paymentData.currency,
+      cardLast4: cardNumber ? cardNumber.slice(-4) : 'MISSING',
+      gateway: merchant.gateway
+    });
 
     let result;
 
     // Process payment based on gateway
-    logToFile(`Processing payment for invoice ${invoice.invoiceNumber} with merchant gateway: ${merchant.gateway}`);
+    console.log(`\n>>> Processing payment via ${merchant.gateway} gateway...`);
+    logToFile(`\n>>> Processing payment via ${merchant.gateway} gateway...`);
     
-    switch (merchant.gateway) {
-      case 'stripe': {
-        logToFile('Using Stripe payment processor');
-        const { processStripePayment } = require('../utils/stripe');
-        result = await processStripePayment(merchant.credentials, paymentData);
-        break;
+    try {
+      switch (merchant.gateway) {
+        case 'stripe': {
+          const { processStripePayment } = require('../utils/stripe');
+          result = await processStripePayment(merchant.credentials, paymentData);
+          break;
+        }
+        case 'paypal': {
+          const { processPayPalPayment } = require('../utils/paypal');
+          result = await processPayPalPayment(merchant.credentials, paymentData);
+          break;
+        }
+        case 'authorize': {
+          const { processAuthorizePayment } = require('../utils/authorize');
+          result = await processAuthorizePayment(merchant.credentials, paymentData);
+          break;
+        }
+        case 'beyondbancard': {
+          console.log('🔷 Calling NMI payment processor...');
+          logToFile('🔷 Calling NMI payment processor...');
+          const { processNMIPayment } = require('../utils/nmi-payment');
+          result = await processNMIPayment(merchant.credentials, paymentData);
+          console.log('🔷 NMI processor returned:', JSON.stringify(result, null, 2));
+          logToFile('🔷 NMI processor returned: ' + JSON.stringify(result, null, 2));
+          break;
+        }
+        default:
+          console.log(`ERROR: Unsupported gateway: ${merchant.gateway}`);
+          return res.status(400).json({ message: 'Unsupported payment gateway: ' + merchant.gateway });
       }
-      case 'paypal': {
-        logToFile('Using PayPal payment processor');
-        const { processPayPalPayment } = require('../utils/paypal');
-        result = await processPayPalPayment(merchant.credentials, paymentData);
-        break;
-      }
-      case 'authorize': {
-        logToFile('Using Authorize.net payment processor');
-        const { processAuthorizePayment } = require('../utils/authorize');
-        result = await processAuthorizePayment(merchant.credentials, paymentData);
-        break;
-      }
-      case 'beyondbancard': {
-        logToFile('🔷 Using BeyondBancard payment processor');
-        const { processBeyondbancardPayment } = require('../utils/beyondbancard');
-        result = await processBeyondbancardPayment(merchant.credentials, paymentData);
-        break;
-      }
-      default:
-        logToFile(`❌ Unsupported gateway: ${merchant.gateway}`);
-        return res.status(400).json({ message: 'Unsupported payment gateway: ' + merchant.gateway });
+    } catch (processorErr) {
+      console.error('❌ ERROR in payment processor call:', processorErr.message);
+      console.error('Stack:', processorErr.stack);
+      logToFile('❌ ERROR in processor: ' + processorErr.message);
+      throw processorErr;
     }
     
-    logToFile(`Payment processing result: ${JSON.stringify(result)}`);
-    console.log(`Payment processing result:`, JSON.stringify(result, null, 2));
+    if (!result) {
+      console.error('❌ Payment processor returned null/undefined result');
+      logToFile('❌ Processor returned null');
+      return res.status(500).json({ 
+        message: 'Payment processor error - no response',
+        error: 'Payment processor failed to return result'
+      });
+    }
+    
+    console.log('\n>>> Payment processor result:', JSON.stringify(result, null, 2));
+    logToFile('\n>>> Processor result: ' + JSON.stringify(result, null, 2));
 
     if (result.success) {
+      console.log('✅ Payment successful! Processing invoice update...');
+      logToFile('✅ PAYMENT SUCCESSFUL');
+      
       // Update merchant processed amount
-      const merchant = await db.merchants.findOne({ _id: merchantId });
-      const newProcessedAmount = (merchant.processedAmount || 0) + invoice.total;
+      const freshMerchant = await db.merchants.findOne({ _id: merchantId });
+      const newProcessedAmount = (freshMerchant.processedAmount || 0) + invoice.total;
       await db.merchants.update(
         { _id: merchantId },
         { $set: { processedAmount: newProcessedAmount, updatedAt: new Date().toISOString() } }
       );
       
+      console.log(`Merchant amount updated: ${freshMerchant.processedAmount || 0} -> ${newProcessedAmount}`);
+      
       // Check if limit reached and notify
-      if (merchant.amountLimit && newProcessedAmount >= merchant.amountLimit) {
-        // Create notification for admin
+      if (freshMerchant.amountLimit && newProcessedAmount >= freshMerchant.amountLimit) {
         await db.notifications.insert({
           type: 'merchant_limit_reached',
-          merchantId: merchant._id,
-          merchantNickname: merchant.nickname,
-          amountLimit: merchant.amountLimit,
+          merchantId: freshMerchant._id,
+          merchantNickname: freshMerchant.nickname,
+          amountLimit: freshMerchant.amountLimit,
           processedAmount: newProcessedAmount,
-          message: `Merchant "${merchant.nickname}" has reached its amount limit of $${merchant.amountLimit.toFixed(2)}`,
+          message: `Merchant "${freshMerchant.nickname}" has reached its amount limit of $${freshMerchant.amountLimit.toFixed(2)}`,
           read: false,
           createdAt: new Date().toISOString(),
         });
+        console.log('Notification created for limit reached');
       }
       
       // Update invoice status
@@ -251,25 +316,35 @@ router.post('/public/:id/pay', async (req, res) => {
         }
       );
       
+      console.log(`Invoice ${invoice.invoiceNumber} marked as paid`);
+      
       // Fetch updated invoice with brand info
       const updatedInvoice = await db.invoices.findOne({ _id: invoice._id });
       const brand = updatedInvoice.brandId ? await db.brands.findOne({ _id: updatedInvoice.brandId }) : null;
       
-      console.log('Payment successful - Brand redirect check:', {
+      console.log('Brand redirect info:', {
         hasBrand: !!brand,
         enableRedirect: brand?.enableRedirect,
-        redirectUrl: brand?.redirectUrl
+        hasRedirectUrl: !!brand?.redirectUrl
       });
       
-      res.json({ 
+      const response = { 
         status: 'paid', 
         message: result.message || 'Payment successful',
         transactionId: result.transactionId,
         redirectUrl: (brand && brand.enableRedirect && brand.redirectUrl) ? brand.redirectUrl : null,
         enableRedirect: (brand && brand.enableRedirect) ? true : false,
         brand: brand ? { name: brand.name, redirectUrl: brand.redirectUrl, enableRedirect: brand.enableRedirect } : null
-      });
+      };
+      
+      console.log('Sending success response:', response);
+      logToFile('SUCCESS RESPONSE: ' + JSON.stringify(response, null, 2));
+      res.json(response);
     } else {
+      // Payment failed
+      console.log('❌ Payment failed:', result.error);
+      logToFile('❌ PAYMENT FAILED: ' + result.error);
+      
       // Update invoice status to failed
       await db.invoices.update(
         { _id: invoice._id },
@@ -281,22 +356,37 @@ router.post('/public/:id/pay', async (req, res) => {
         }
       );
       
-      console.log('Payment failed - Result:', JSON.stringify(result, null, 2));
-      res.status(400).json({ 
+      const errorResponse = {
         status: 'failed',
         message: result.error || 'Payment failed',
         errorCode: result.errorCode,
         debug: process.env.NODE_ENV === 'development' ? result : undefined
-      });
+      };
+      
+      console.log('Sending error response:', errorResponse);
+      logToFile('ERROR RESPONSE: ' + JSON.stringify(errorResponse, null, 2));
+      res.status(200).json(errorResponse);
     }
+    
+    console.log('========== PAYMENT REQUEST COMPLETE ==========\n');
+    logToFile('========== PAYMENT REQUEST COMPLETE ==========\n');
+    
   } catch (err) {
-    console.error('🔴 Payment endpoint error:', err);
-    console.error('Error message:', err.message);
-    console.error('Error stack:', err.stack);
+    console.error('\n❌❌❌ CATCH BLOCK ERROR ❌❌❌');
+    console.error('Message:', err.message);
+    console.error('Stack:', err.stack);
+    console.error('Name:', err.name);
+    console.error('Code:', err.code);
+    
+    logToFile('\n❌❌❌ CATCH BLOCK ERROR ❌❌❌');
+    logToFile('Message: ' + err.message);
+    logToFile('Stack: ' + err.stack);
+    logToFile('Name: ' + err.name);
     
     res.status(500).json({ 
       status: 'error',
       message: err.message || 'Payment processing failed',
+      errorCode: err.code,
       details: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
   }
@@ -316,6 +406,9 @@ router.post('/', auth, async (req, res) => {
   try {
     const { brandId, items, customerEmail, customerName, customerSerialNumber } = req.body;
     
+    console.log('\n=== INVOICE CREATE ENDPOINT ===');
+    console.log('Received items:', JSON.stringify(items, null, 2));
+    
     if (!brandId) return res.status(400).json({ message: 'Brand is required' });
     if (!items || items.length === 0) return res.status(400).json({ message: 'At least one item is required' });
     if (!customerEmail) return res.status(400).json({ message: 'Customer email is required' });
@@ -326,6 +419,9 @@ router.post('/', auth, async (req, res) => {
     if (!brand) return res.status(404).json({ message: 'Brand not found' });
 
     const total = items.reduce((sum, item) => sum + Number(item.amount), 0);
+    console.log('Calculated total:', total);
+    console.log('Item amounts as numbers:', items.map(i => ({ desc: i.description, amount: Number(i.amount) })));
+
 
     // Generate unique invoice number
     let invoiceNumber;

@@ -53,11 +53,26 @@ export default function Invoices() {
   const removeItem = (i) => setForm({ ...form, items: form.items.filter((_, idx) => idx !== i) });
   const updateItem = (i, field, value) => {
     const items = [...form.items];
+    if (field === 'amount') {
+      // Debug: log what's being set
+      console.log(`Setting amount[${i}] to:`, value, 'Type:', typeof value);
+    }
     items[i] = { ...items[i], [field]: value };
     setForm({ ...form, items });
   };
 
-  const total = form.items.reduce((s, item) => s + (parseFloat(item.amount) || 0), 0);
+  const total = form.items.reduce((s, item) => {
+    let amount = parseFloat(item.amount) || 0;
+    // If amount appears to be in cents (if it's > 100 and looks like cents), convert to dollars
+    if (amount > 100 && form.items.length > 0 && item.amount) {
+      // Check if this might be a cents value (e.g., user meant $5 but it shows as 500)
+      const itemStr = String(item.amount);
+      if (itemStr.length === 3 && itemStr.endsWith('00')) {
+        amount = amount / 100;
+      }
+    }
+    return s + amount;
+  }, 0);
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -67,6 +82,13 @@ export default function Invoices() {
     if (!form.customerName) return toast.error('Customer name is required');
     if (!form.customerEmail) return toast.error('Customer email is required');
     if (!form.customerSerialNumber) return toast.error('Customer serial number is required');
+    
+    // Debug: Log what we're sending
+    console.log('=== INVOICE CREATION DEBUG ===');
+    console.log('Items being sent:', JSON.stringify(validItems, null, 2));
+    const calculatedTotal = validItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+    console.log('Calculated total:', calculatedTotal);
+    console.log('Form total:', total);
     
     setSaving(true);
     try {

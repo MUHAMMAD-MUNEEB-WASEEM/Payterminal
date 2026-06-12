@@ -15,83 +15,313 @@ function logToFile(message) {
   fs.appendFileSync(path.join(logsDir, 'beyondbancard.log'), logMessage);
   console.log(message); // Also log to console
 }
-// Documentation: https://beyondbancard.com
-// The Transaction Gateway API uses REST with Basic Auth
-//
-// Key endpoints:
-// - Sandbox: https://api.sandbox.transactiongateway.com (or similar)
-// - Live: https://beyondbancard.transactiongateway.com (or similar)
-//
-// Note: The exact endpoint may vary. If you get 404 errors:
-// 1. Verify the correct API endpoint with BeyondBancard support
-// 2. Check if the endpoint requires a specific path like /api/v1 or just /
-// 3. Confirm the transaction endpoint is /transactions or /charge or something else
 
-const BEYONDBANCARD_API_ENDPOINT = 'https://beyondbancard.transactiongateway.com/api/v1';
-const BEYONDBANCARD_SANDBOX_ENDPOINT = 'https://api.sandbox.transactiongateway.com/api/v1';
+// BeyondBancard API endpoint - uses form-encoded POST
+// Documentation: https://beyondbancard.com
+// The transact.php endpoint accepts form-encoded parameters
+const BEYONDBANCARD_API_ENDPOINT = 'https://beyondbancard.transactiongateway.com/api/transact.php';
+const BEYONDBANCARD_SANDBOX_ENDPOINT = 'https://api.sandbox.transactiongateway.com/api/transact.php';
 
 async function processBeyondbancardPayment(credentials, paymentData) {
   try {
+    // Log at the very start
+    console.log('🚀 BeyondBancard payment processor started');
+    logToFile('🚀 BeyondBancard payment processor started');
+    
+    const hasToken = !!paymentData.token;
+    const hasCardData = !!paymentData.cardNumber;
+    
+    console.log('Input credentials:', { hasCredentials: !!credentials, hasApiKey: !!credentials?.apiKey, hasApiSecret: !!credentials?.apiSecret, mode: credentials?.mode });
+    console.log('Input paymentData:', { 
+      amount: paymentData.amount,
+      hasToken: hasToken,
+      hasCardNumber: hasCardData,
+      cardHolder: paymentData.cardHolder,
+      expiryMonth: paymentData.expiryMonth,
+      expiryYear: paymentData.expiryYear,
+      hasCvv: !!paymentData.cvv,
+      currency: paymentData.currency
+    });
+    
     // Validate credentials
-    if (!credentials.apiKey || !credentials.apiSecret) {
+    if (!credentials || !credentials.apiKey || !credentials.apiSecret) {
+      console.error('❌ Missing credentials:', { hasCredentials: !!credentials, hasApiKey: !!credentials?.apiKey, hasApiSecret: !!credentials?.apiSecret });
+      logToFile('❌ Missing credentials');
       return {
         success: false,
-        error: 'BeyondBancard API Key and Secret are required'
+        error: 'BeyondBancard API Key and Secret are required',
+        errorCode: 'MISSING_CREDENTIALS'
       };
     }
 
+    console.log('✅ Credentials present');
+    logToFile('✅ Credentials present');
+    
+    // Handle tokenized payments (from Collect.js)
+    if (paymentData.token) {
+      console.log('🔷 Processing tokenized payment...');
+      logToFile('🔷 Processing tokenized payment with token: ' + paymentData.token);
+      
+      const endpoint = credentials.mode === 'live' 
+        ? BEYONDBANCARD_API_ENDPOINT 
+        : BEYONDBANCARD_SANDBOX_ENDPOINT;
+
+      console.log('📍 Using endpoint:', endpoint);
+      logToFile('📍 Endpoint: ' + endpoint);
+      
+      // Build payment request using token
+      const paymentRequest = {
+        type: 'sale',
+        amount: (paymentData.amount * 100).toFixed(0), // Amount in cents
+        currency: paymentData.currency || 'USD',
+        payment_token: paymentData.token, // Use token instead of card data
+        firstname: paymentData.cardHolder.split(' ')[0] || paymentData.cardHolder,
+        lastname: paymentData.cardHolder.split(' ').slice(1).join(' ') || '',
+        orderid: paymentData.description,
+        orderdescription: paymentData.description,
+        username: credentials.apiKey,
+        password: credentials.apiSecret
+      };
+
+      console.log('\n📤 SENDING TOKENIZED REQUEST TO BEYONDBANCARD');
+      console.log('Endpoint:', endpoint);
+      console.log('Amount:', paymentData.amount, 'USD (cents:', paymentRequest.amount + ')');
+      console.log('Token:', paymentData.token.substring(0, 10) + '...');
+      console.log('Cardholder:', paymentData.cardHolder);
+      console.log('Request keys:', Object.keys(paymentRequest));
+      
+      logToFile('\n📤 SENDING TOKENIZED REQUEST');
+      logToFile('Endpoint: ' + endpoint);
+      logToFile('Amount: ' + paymentData.amount + ' USD');
+      logToFile('Token: ' + paymentData.token.substring(0, 10) + '...');
+      logToFile('Request keys: ' + Object.keys(paymentRequest).join(', '));
+
+      // Convert to URL-encoded form data
+      const formData = new URLSearchParams();
+      Object.entries(paymentRequest).forEach(([key, value]) => {
+        formData.append(key, value);
+      });
+
+      console.log('Form data prepared');
+      logToFile('Form data prepared');
+      
+      let response;
+      
+      try {
+        console.log(`\n🔷 Posting tokenized request to ${endpoint}...`);
+        logToFile(`🔷 Posting tokenized request to ${endpoint}...`);
+        
+        const httpsAgent = new (require('https').Agent)({
+          rejectUnauthorized: false
+        });
+        
+        response = await axios.post(endpoint, formData, {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          timeout: 30000,
+          validateStatus: () => true,
+          httpsAgent: httpsAgent
+        });
+
+        console.log(`✅ Response received - Status ${response.status}`);
+        logToFile(`✅ Response received - Status ${response.status}`);
+        
+      } catch (error) {
+        console.error('❌ Request error:', error.message);
+        logToFile('❌ Request error: ' + error.message);
+        throw error;
+      }
+
+      // Parse response
+      const responseText = response.data || '';
+      console.log('\n📥 Raw response:', responseText);
+      logToFile('\n📥 Raw response: ' + responseText);
+      
+      const params = new URLSearchParams(responseText);
+      const resultCode = params.get('response') || '';
+      const reasonText = params.get('responsetext') || '';
+      const transactionId = params.get('transactionid') || '';
+      const authCode = params.get('authcode') || '';
+      
+      console.log('Response parsed:', {
+        resultCode,
+        reasonText,
+        transactionId,
+        authCode
+      });
+      logToFile('Response parsed: resultCode=' + resultCode + ', reasonText=' + reasonText);
+      
+      // Check result
+      if (resultCode === '1') {
+        console.log('✅ Tokenized payment successful! Transaction ID:', transactionId);
+        logToFile('✅ TOKENIZED PAYMENT SUCCESSFUL');
+        logToFile('Transaction ID: ' + transactionId);
+        
+        return {
+          success: true,
+          transactionId: transactionId,
+          authCode: authCode,
+          message: 'Payment processed successfully',
+          reference: transactionId
+        };
+      }
+      
+      if (resultCode === '2') {
+        const errorMsg = reasonText || 'Payment declined';
+        console.log('❌ Payment declined:', errorMsg);
+        logToFile('❌ PAYMENT DECLINED: ' + errorMsg);
+        return {
+          success: false,
+          error: 'Payment declined - ' + errorMsg,
+          errorCode: 'PAYMENT_DECLINED'
+        };
+      }
+      
+      if (resultCode === '3') {
+        const errorMsg = reasonText || 'Payment processing error';
+        console.log('❌ Payment error:', errorMsg);
+        logToFile('❌ PAYMENT ERROR: ' + errorMsg);
+        
+        if (reasonText && reasonText.toLowerCase().includes('authentication')) {
+          return {
+            success: false,
+            error: 'Authentication failed - Invalid API Key or Secret. Response: ' + reasonText,
+            errorCode: 'AUTH_FAILED'
+          };
+        }
+        
+        return {
+          success: false,
+          error: 'Payment error - ' + errorMsg,
+          errorCode: 'PAYMENT_ERROR'
+        };
+      }
+      
+      console.error('❌ Unknown result code:', resultCode);
+      logToFile('❌ Unknown result code: ' + resultCode);
+      logToFile('Full response: ' + responseText);
+      
+      return {
+        success: false,
+        error: 'Unknown payment response - ' + (reasonText || 'Please contact support'),
+        errorCode: 'UNKNOWN_RESPONSE'
+      };
+    }
+    
+    // Original raw card data handling (for fallback)
+    
     // Validate card data - STRICT VALIDATION
     if (!paymentData.cardNumber || !paymentData.cardHolder || !paymentData.expiryMonth || !paymentData.expiryYear || !paymentData.cvv) {
+      console.error('❌ Card data incomplete:', { 
+        cardNumber: !!paymentData.cardNumber, 
+        cardHolder: !!paymentData.cardHolder, 
+        expiryMonth: !!paymentData.expiryMonth, 
+        expiryYear: !!paymentData.expiryYear, 
+        cvv: !!paymentData.cvv 
+      });
+      logToFile('❌ Card data incomplete');
       return {
         success: false,
-        error: 'Card information is incomplete'
+        error: 'Card information is incomplete',
+        errorCode: 'INCOMPLETE_CARD_DATA'
       };
     }
 
-    // Validate card format
+    console.log('✅ Card data complete');
+    logToFile('✅ Card data complete');
+
+    // Validate and format card data
     const cardNumber = paymentData.cardNumber.replace(/\s/g, '');
-    const cvv = paymentData.cvv.trim();
+    const cvv = String(paymentData.cvv).trim();
     const expiryMonth = String(paymentData.expiryMonth).padStart(2, '0');
     const expiryYear = String(paymentData.expiryYear);
+    
+    console.log('Card data formatted:', {
+      cardNumber: cardNumber.slice(0, 4) + '...' + cardNumber.slice(-4),
+      expiryMonth,
+      expiryYear,
+      cvvLength: cvv.length
+    });
+    logToFile('Card data formatted successfully');
+
+    console.log('Validating card format...');
+    logToFile('Validating card format...');
 
     // Validate card number (must be 13-19 digits)
     if (!/^\d{13,19}$/.test(cardNumber)) {
+      console.error('❌ Invalid card number format:', { 
+        length: cardNumber.length, 
+        pattern: `/^\d{13,19}$/`,
+        sample: cardNumber.slice(0, 4) + '...' 
+      });
+      logToFile('❌ Invalid card number format: length=' + cardNumber.length);
       return {
         success: false,
-        error: 'Invalid card number format'
+        error: 'Invalid card number format',
+        errorCode: 'INVALID_CARD_FORMAT'
       };
     }
+
+    console.log('✅ Card number format valid');
+    logToFile('✅ Card number format valid');
 
     // Validate CVV (3-4 digits)
     if (!/^\d{3,4}$/.test(cvv)) {
+      console.error('❌ Invalid CVV:', { length: cvv.length, pattern: `/^\d{3,4}$/` });
+      logToFile('❌ Invalid CVV: length=' + cvv.length);
       return {
         success: false,
-        error: 'Invalid CVV'
+        error: 'Invalid CVV',
+        errorCode: 'INVALID_CVV'
       };
     }
 
+    console.log('✅ CVV valid');
+    logToFile('✅ CVV valid');
+
     // Validate expiry month (01-12)
     if (!/^(0[1-9]|1[0-2])$/.test(expiryMonth)) {
+      console.error('❌ Invalid expiry month:', expiryMonth);
+      logToFile('❌ Invalid expiry month: ' + expiryMonth);
       return {
         success: false,
-        error: 'Invalid expiry month'
+        error: 'Invalid expiry month',
+        errorCode: 'INVALID_MONTH'
       };
     }
+
+    console.log('✅ Expiry month valid');
+    logToFile('✅ Expiry month valid');
 
     // Validate expiry year (current or future)
     const currentYear = new Date().getFullYear();
     const currentMonth = new Date().getMonth() + 1;
     const year = parseInt(expiryYear);
     
-    if (year < currentYear || (year === currentYear && parseInt(expiryMonth) < currentMonth)) {
+    if (isNaN(year) || year < currentYear || (year === currentYear && parseInt(expiryMonth) < currentMonth)) {
+      console.error('❌ Card has expired or invalid year:', { 
+        expiryYear: expiryYear, 
+        year: year, 
+        currentYear: currentYear, 
+        currentMonth: currentMonth, 
+        expiryMonth: expiryMonth 
+      });
+      logToFile(`❌ Card expired/invalid: year=${year}, current=${currentYear}`);
       return {
         success: false,
-        error: 'Card has expired'
+        error: 'Card has expired',
+        errorCode: 'CARD_EXPIRED'
       };
     }
 
+    console.log('✅ Expiry date valid');
+    logToFile('✅ Expiry date valid');
+
     // Luhn algorithm validation for card number
     if (!luhnCheck(cardNumber)) {
+      console.error('❌ Invalid card number (Luhn check failed)');
+      logToFile('❌ Luhn check failed');
       return {
         success: false,
         error: 'Invalid card number',
@@ -99,282 +329,193 @@ async function processBeyondbancardPayment(credentials, paymentData) {
       };
     }
 
+    console.log('✅ Luhn check passed');
+    logToFile('✅ Luhn check passed');
+
+    // Get endpoint
     const endpoint = credentials.mode === 'live' 
       ? BEYONDBANCARD_API_ENDPOINT 
       : BEYONDBANCARD_SANDBOX_ENDPOINT;
 
-    // Create axios instance with authentication
-    // Transaction Gateway uses Basic Auth with API Key and Secret
-    const auth = {
+    console.log('📍 Using endpoint:', endpoint);
+    logToFile('📍 Endpoint: ' + endpoint);
+    
+    // BeyondBancard transact.php uses form-encoded POST
+    // Build form data for the API
+    const paymentRequest = {
+      type: 'sale',
+      amount: (paymentData.amount * 100).toFixed(0), // Amount in cents (no decimal)
+      currency: paymentData.currency || 'USD',
+      ccnumber: cardNumber,
+      ccexp: `${expiryMonth}${expiryYear}`, // Format: MMYY
+      cvv: cvv,
+      firstname: paymentData.cardHolder.split(' ')[0] || paymentData.cardHolder,
+      lastname: paymentData.cardHolder.split(' ').slice(1).join(' ') || '',
+      orderid: paymentData.description,
+      orderdescription: paymentData.description,
       username: credentials.apiKey,
       password: credentials.apiSecret
     };
 
-    const instance = axios.create({
-      baseURL: endpoint,
-      auth: auth,
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'PayTerminal/1.0'
-      },
-      timeout: 30000
+    console.log('\n📤 SENDING REQUEST TO BEYONDBANCARD');
+    console.log('Endpoint:', endpoint);
+    console.log('Amount:', paymentData.amount, 'USD (cents:', paymentRequest.amount + ')');
+    console.log('Card last 4:', cardNumber.slice(-4));
+    console.log('Cardholder:', paymentData.cardHolder);
+    console.log('Expiry:', `${expiryMonth}/${expiryYear}`);
+    console.log('Request keys:', Object.keys(paymentRequest));
+    
+    logToFile('\n📤 SENDING REQUEST');
+    logToFile('Endpoint: ' + endpoint);
+    logToFile('Amount: ' + paymentData.amount + ' USD');
+    logToFile('Card: ' + cardNumber.slice(-4));
+    logToFile('Request keys: ' + Object.keys(paymentRequest).join(', '));
+
+    // Convert object to URL-encoded form data
+    const formData = new URLSearchParams();
+    Object.entries(paymentRequest).forEach(([key, value]) => {
+      formData.append(key, value);
     });
 
-    // Format payment request for Transaction Gateway
-    // Try a simpler request format first
-    const paymentRequest = {
-      transaction_type: 'charge',
-      payment_method: 'credit_card',
-      amount: Math.round(paymentData.amount * 100), // Amount in cents
-      currency: paymentData.currency || 'USD',
-      credit_card: {
-        card_number: cardNumber,
-        cardholder_name: paymentData.cardHolder,
-        expiration_month: expiryMonth,
-        expiration_year: expiryYear,
-        cvv: cvv
-      },
-      order: {
-        invoice_number: paymentData.description,
-        description: paymentData.description
-      }
-    };
-
-    console.log('Processing BeyondBancard payment via:', endpoint);
-    console.log('Payment amount:', paymentData.amount, 'Card last 4:', cardNumber.slice(-4));
-    console.log('Request payload:', JSON.stringify(paymentRequest, null, 2));
-    
-    logToFile('=== PAYMENT REQUEST ===');
-    logToFile('Endpoint: ' + endpoint);
-    logToFile('Amount: ' + paymentData.amount);
-    logToFile('Card last 4: ' + cardNumber.slice(-4));
-    logToFile('Request: ' + JSON.stringify(paymentRequest, null, 2));
+    console.log('Form data prepared');
+    logToFile('Form data prepared');
     
     let response;
-    let attemptedEndpoint = '/transactions';
-    let rawError = null;
     
     try {
-      // Try the main transactions endpoint
-      response = await instance.post('/transactions', paymentRequest);
-    } catch (err) {
-      rawError = {
-        message: err.message,
-        code: err.code,
-        status: err.response?.status,
-        statusText: err.response?.statusText,
-        data: err.response?.data
-      };
+      console.log(`\n🔷 Posting to ${endpoint}...`);
+      logToFile(`🔷 Posting to ${endpoint}...`);
       
-      console.warn('❌ /transactions endpoint failed:', JSON.stringify(rawError, null, 2));
+      // In development, disable SSL certificate verification for sandbox endpoints
+      const httpsAgent = new (require('https').Agent)({
+        rejectUnauthorized: false // Allow self-signed/mismatched certificates in development
+      });
       
-      // If /transactions doesn't work, try alternative endpoints
-      if (err.response?.status === 404) {
-        console.warn('⚠️ /transactions returned 404, trying alternatives...');
-        try {
-          response = await instance.post('/charge', paymentRequest);
-          attemptedEndpoint = '/charge';
-          console.log('✅ /charge endpoint worked');
-        } catch (err2) {
-          console.warn('⚠️ /charge also failed:', err2.message);
-          try {
-            response = await instance.post('/', paymentRequest);
-            attemptedEndpoint = '/';
-            console.log('✅ / endpoint worked');
-          } catch (err3) {
-            // All endpoints failed
-            console.error('❌ All endpoints failed. Last error:', JSON.stringify({
-              message: err3.message,
-              status: err3.response?.status,
-              data: err3.response?.data
-            }, null, 2));
-            throw err; // Throw the original error
-          }
-        }
-      } else {
-        // Non-404 error on first attempt
-        console.error('❌ First request failed with non-404 error:', rawError);
-        throw err;
-      }
+      response = await axios.post(endpoint, formData, {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        timeout: 30000,
+        validateStatus: () => true, // Accept all status codes
+        httpsAgent: httpsAgent
+      });
+
+      console.log(`✅ Response received - Status ${response.status}`);
+      logToFile(`✅ Response received - Status ${response.status}`);
+      
+    } catch (error) {
+      console.error('❌ Request error:', error.message);
+      logToFile('❌ Request error: ' + error.message);
+      throw error;
     }
 
-    console.log(`✅ Request succeeded on endpoint: ${attemptedEndpoint}`);
-    console.log('BeyondBancard response status:', response.status);
-    console.log('BeyondBancard response data:', JSON.stringify(response.data, null, 2));
-
-    // BeyondBancard Transaction Gateway returns different response formats
-    // We need to check multiple fields to determine success
-    const responseData = response.data || {};
+    // Parse response - BeyondBancard returns query-string format
+    // Format: response=X&responsetext=...&authcode=...&transactionid=...
+    // response = Result code (1=approved, 2=declined, 3=error)
     
-    // Possible transaction ID fields
-    const transactionId = responseData.transaction_id || 
-                         responseData.id || 
-                         responseData.transactionId ||
-                         responseData.reference_id;
+    const responseText = response.data || '';
+    console.log('\n📥 Raw response:', responseText);
+    logToFile('\n📥 Raw response: ' + responseText);
     
-    // Possible success indicators
-    const successIndicators = [
-      responseData.success === true,
-      responseData.status === 'approved',
-      responseData.status === 'captured',
-      responseData.status === 'success',
-      responseData.result === 'success',
-      (response.status === 200 || response.status === 201) && transactionId
-    ];
+    // Parse query string format response
+    const params = new URLSearchParams(responseText);
+    const resultCode = params.get('response') || '';
+    const reasonText = params.get('responsetext') || '';
+    const transactionId = params.get('transactionid') || '';
+    const authCode = params.get('authcode') || '';
     
-    const isSuccessful = successIndicators.some(x => x);
-
-    if (isSuccessful && transactionId) {
+    console.log('Response parsed:', {
+      resultCode,
+      reasonText,
+      transactionId,
+      authCode
+    });
+    logToFile('Response parsed: resultCode=' + resultCode + ', reasonText=' + reasonText + ', transactionId=' + transactionId);
+    
+    // Check if payment was successful
+    // Result code 1 = Approved
+    if (resultCode === '1') {
       console.log('✅ Payment successful! Transaction ID:', transactionId);
       logToFile('✅ PAYMENT SUCCESSFUL');
       logToFile('Transaction ID: ' + transactionId);
+      logToFile('Auth Code: ' + authCode);
+      
       return {
         success: true,
         transactionId: transactionId,
+        authCode: authCode,
         message: 'Payment processed successfully',
-        authCode: responseData.authorization_code || responseData.auth_code || responseData.authCode,
         reference: transactionId
       };
-    } else if (responseData.errors && responseData.errors.length > 0) {
-      // API returned errors array
-      const firstError = responseData.errors[0];
-      const errorMsg = firstError.message || firstError.description || 'Payment declined';
+    }
+    
+    // Result code 2 = Declined
+    if (resultCode === '2') {
+      const errorMsg = reasonText || 'Payment declined';
+      console.log('❌ Payment declined:', errorMsg);
+      logToFile('❌ PAYMENT DECLINED: ' + errorMsg);
+      return {
+        success: false,
+        error: 'Payment declined - ' + errorMsg,
+        errorCode: 'PAYMENT_DECLINED'
+      };
+    }
+    
+    // Result code 3 = Error
+    if (resultCode === '3') {
+      const errorMsg = reasonText || 'Payment processing error';
       console.log('❌ Payment error:', errorMsg);
-      logToFile('❌ PAYMENT ERROR (errors array):');
-      logToFile('Error: ' + errorMsg);
-      logToFile('Error code: ' + firstError.code);
-      return {
-        success: false,
-        error: errorMsg,
-        errorCode: firstError.code
-      };
-    } else if (!isSuccessful) {
-      // Not successful - determine why
-      const errorMsg = responseData.error_message || 
-                      responseData.message || 
-                      responseData.description ||
-                      `Payment was not processed. Status: ${responseData.status}`;
-      console.log('❌ Payment failed:', errorMsg);
-      logToFile('❌ PAYMENT FAILED:');
-      logToFile('Error: ' + errorMsg);
-      logToFile('Response data: ' + JSON.stringify(responseData, null, 2));
-      return {
-        success: false,
-        error: errorMsg,
-        errorCode: responseData.error_code || responseData.code || 'PAYMENT_FAILED'
-      };
-    } else {
-      // We have transaction ID but success not confirmed
-      console.log('⚠️ Ambiguous response - transaction ID present but success not confirmed');
-      logToFile('⚠️ AMBIGUOUS RESPONSE:');
-      logToFile('Transaction ID: ' + transactionId);
-      return {
-        success: true,
-        transactionId: transactionId,
-        message: 'Payment processed',
-        reference: transactionId
-      };
-    }
-  } catch (error) {
-    console.error('\n❌ PAYMENT PROCESSOR ERROR:');
-    console.error('Gateway: BeyondBancard');
-    console.error('Error message:', error.message);
-    console.error('Error code:', error.code);
-    console.error('Error name:', error.name);
-    
-    logToFile('');
-    logToFile('❌ PAYMENT PROCESSOR ERROR:');
-    logToFile('Error message: ' + error.message);
-    logToFile('Error code: ' + error.code);
-    logToFile('Error name: ' + error.name);
-    
-    if (error.response) {
-      console.error('---Response Details---');
-      console.error('Response status:', error.response.status);
-      console.error('Response statusText:', error.response.statusText);
-      console.error('Response data:', JSON.stringify(error.response.data, null, 2));
+      logToFile('❌ PAYMENT ERROR: ' + errorMsg);
       
-      logToFile('---Response Details---');
-      logToFile('Status: ' + error.response.status);
-      logToFile('StatusText: ' + error.response.statusText);
-      logToFile('Data: ' + JSON.stringify(error.response.data, null, 2));
-    } else if (error.request) {
-      console.error('---Request Made But No Response---');
-      console.error('Request:', error.request);
-      logToFile('---Request Made But No Response---');
-    } else {
-      console.error('---Error During Request Setup---');
-      console.error('Error message:', error.message);
-      logToFile('---Error During Request Setup---');
-      logToFile('Message: ' + error.message);
-    }
-    console.error('Error stack:', error.stack);
-    console.error('\n');
-    logToFile('');
-
-    // Handle specific error responses
-    if (error.response) {
-      const errorData = error.response.data || {};
-      
-      if (error.response.status === 401 || error.response.status === 403) {
+      // Special handling for authentication errors
+      if (reasonText && reasonText.toLowerCase().includes('authentication')) {
         return {
           success: false,
-          error: 'Invalid API credentials - authentication failed. Please verify your API Key and Secret.',
+          error: 'Authentication failed - Invalid API Key or Secret. Response: ' + reasonText,
           errorCode: 'AUTH_FAILED'
         };
       }
-
-      if (error.response.status === 404) {
-        return {
-          success: false,
-          error: 'BeyondBancard API endpoint not found. The endpoint may have changed. Please contact BeyondBancard support or check your endpoint configuration.',
-          errorCode: 'ENDPOINT_NOT_FOUND'
-        };
-      }
-
-      if (error.response.status === 400) {
-        // 400 means invalid request data - card declined, expired, etc.
-        return {
-          success: false,
-          error: errorData.error_message || errorData.message || 'Invalid payment data - ' + (errorData.errors?.[0]?.message || 'please check your card details'),
-          errorCode: errorData.error_code || 'INVALID_REQUEST'
-        };
-      }
-
-      if (error.response.status === 402 || errorData?.error_code === 'declined' || errorData?.status === 'declined') {
-        return {
-          success: false,
-          error: 'Payment declined - ' + (errorData.error_message || errorData.message || 'Your card was declined'),
-          errorCode: 'PAYMENT_DECLINED'
-        };
-      }
-
-      if (error.response.status === 422) {
-        // Unprocessable entity - validation error
-        return {
-          success: false,
-          error: 'Invalid card data - ' + (errorData.error_message || errorData.message || 'Please check your card details'),
-          errorCode: 'VALIDATION_ERROR'
-        };
-      }
-
-      if (error.response.status === 500 || error.response.status === 502 || error.response.status === 503) {
-        return {
-          success: false,
-          error: `BeyondBancard server error (${error.response.status}) - please try again later`,
-          errorCode: 'GATEWAY_ERROR'
-        };
-      }
-
-      // Generic error response
+      
       return {
         success: false,
-        error: errorData.error_message || errorData.message || `Payment failed with status ${error.response.status}`,
-        errorCode: errorData.error_code || 'UNKNOWN_ERROR'
+        error: 'Payment error - ' + errorMsg,
+        errorCode: 'PAYMENT_ERROR'
       };
     }
+    
+    // Unknown result code
+    console.error('❌ Unknown result code:', resultCode);
+    logToFile('❌ Unknown result code: ' + resultCode);
+    logToFile('Full response: ' + responseText);
+    
+    return {
+      success: false,
+      error: 'Unknown payment response - ' + (reasonText || 'Please contact support'),
+      errorCode: 'UNKNOWN_RESPONSE'
+    };
+    
+  } catch (error) {
+    console.error('\n❌❌❌ CATCH BLOCK ERROR ❌❌❌');
+    console.error('Message:', error.message);
+    console.error('Code:', error.code);
+    console.error('Stack:', error.stack);
+    
+    logToFile('\n❌❌❌ CATCH BLOCK ERROR ❌❌❌');
+    logToFile('Message: ' + error.message);
+    logToFile('Code: ' + error.code);
+    
+    if (error.response) {
+      console.error('---Response Details---');
+      console.error('Status:', error.response.status);
+      console.error('StatusText:', error.response.statusText);
+      console.error('Data:', error.response.data);
+      
+      logToFile('---Response Details---');
+      logToFile('Status: ' + error.response.status);
+      logToFile('Data: ' + error.response.data);
+    }
 
-    // Handle network errors
+    // Handle specific error codes
     if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
       return {
         success: false,
@@ -391,11 +532,19 @@ async function processBeyondbancardPayment(credentials, paymentData) {
       };
     }
 
-    if (error.code === 'EAUTHFAILED') {
+    if (error.response?.status === 401 || error.response?.status === 403) {
       return {
         success: false,
-        error: 'SSL certificate authentication failed - API endpoint may be invalid',
-        errorCode: 'SSL_ERROR'
+        error: 'Authentication failed - Invalid API Key or Secret',
+        errorCode: 'AUTH_FAILED'
+      };
+    }
+
+    if (error.response?.status === 404) {
+      return {
+        success: false,
+        error: 'BeyondBancard API endpoint not found. Please verify the endpoint configuration: ' + BEYONDBANCARD_API_ENDPOINT,
+        errorCode: 'ENDPOINT_NOT_FOUND'
       };
     }
 
@@ -443,105 +592,77 @@ async function testBeyondbancardCredentials(apiKey, apiSecret, mode = 'sandbox')
       ? BEYONDBANCARD_API_ENDPOINT
       : BEYONDBANCARD_SANDBOX_ENDPOINT;
 
-    const auth = {
-      username: apiKey,
-      password: apiSecret
-    };
-
-    const instance = axios.create({
-      baseURL: endpoint,
-      auth: auth,
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      timeout: 10000
-    });
-
     console.log('Testing BeyondBancard credentials at:', endpoint);
     
     // Test with a minimal transaction request to verify auth works
-    // This validates that the credentials are accepted by the API
-    const testPayment = {
-      transaction_type: 'charge',
-      payment_method: 'credit_card',
-      amount: 1, // $0.01
+    const testData = new URLSearchParams({
+      type: 'sale',
+      amount: '1', // $0.01
       currency: 'USD',
-      credit_card: {
-        card_number: '4242424242424242', // Test card
-        cardholder_name: 'Test User',
-        expiration_month: '12',
-        expiration_year: '2025',
-        cvv: '999'
-      },
-      order: {
-        invoice_number: 'TEST',
-        description: 'Credential Test'
-      }
-    };
+      ccnumber: '4242424242424242', // Test card
+      ccexp: '1225', // 12/25
+      cvv: '999',
+      firstname: 'Test',
+      lastname: 'User',
+      orderid: 'TEST',
+      orderdescription: 'Credential Test',
+      username: apiKey,
+      password: apiSecret
+    });
 
     try {
-      const response = await instance.post('/transactions', testPayment);
+      // Allow self-signed certificates in development
+      const httpsAgent = new (require('https').Agent)({
+        rejectUnauthorized: false
+      });
+
+      const response = await axios.post(endpoint, testData, {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        timeout: 10000,
+        validateStatus: () => true,
+        httpsAgent: httpsAgent
+      });
+
+      // Parse response
+      const fields = response.data.split('|');
+      const resultCode = fields[0] ? fields[0].trim() : '';
       
-      // If we get here, auth worked (even if transaction failed)
-      if (response.status === 200 || response.status === 201) {
+      // Any result (approved, declined, error) means the API is reachable and auth worked
+      if (response.status === 200 && resultCode) {
         return {
           success: true,
           message: 'Credentials are valid and API is accessible'
         };
       }
-    } catch (testError) {
-      // If auth failed (401/403), the error will have that status
-      if (testError.response?.status === 401 || testError.response?.status === 403) {
+      
+      return {
+        success: false,
+        message: 'API responded but with unexpected format'
+      };
+    } catch (error) {
+      if (error.response?.status === 401 || error.response?.status === 403) {
         return {
           success: false,
           message: 'Invalid API Key or Secret - Authentication failed',
           errorCode: 'AUTH_FAILED'
         };
       }
-      
-      // If we get a 402 or other payment error, auth succeeded but transaction failed
-      // This means credentials are valid
-      if (testError.response?.status === 402 || testError.response?.status === 400) {
-        return {
-          success: true,
-          message: 'Credentials are valid (test transaction declined, which is expected)'
-        };
-      }
-      
-      // For other errors, still consider it a success if we got a response from the API
-      if (testError.response) {
-        return {
-          success: true,
-          message: 'Credentials are valid and API responded'
-        };
-      }
-      
-      throw testError;
-    }
 
-    return {
-      success: true,
-      message: 'Credentials are valid'
-    };
+      if (error.code === 'ENOTFOUND') {
+        return {
+          success: false,
+          message: 'Cannot reach BeyondBancard API. Please check your connection or endpoint configuration.',
+          errorCode: 'ENDPOINT_NOT_FOUND'
+        };
+      }
+
+      throw error;
+    }
   } catch (error) {
     console.error('BeyondBancard credential test error:', error.message);
     
-    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-      return {
-        success: false,
-        message: 'Cannot reach BeyondBancard API. Please check your connection or contact BeyondBancard support.',
-        errorCode: 'ENDPOINT_NOT_FOUND'
-      };
-    }
-
-    if (error.response?.status === 401 || error.response?.status === 403) {
-      return {
-        success: false,
-        message: 'Invalid API Key or Secret',
-        errorCode: 'AUTH_FAILED'
-      };
-    }
-
     return {
       success: false,
       message: error.message || 'Failed to test credentials',

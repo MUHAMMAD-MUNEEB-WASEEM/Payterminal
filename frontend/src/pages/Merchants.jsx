@@ -481,28 +481,40 @@ export default function Merchants() {
 
           {formData.gateway === 'beyondbancard' && (
             <>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
-                <input
-                  type="text"
-                  value={formData.credentials.apiKey || ''}
-                  onChange={(e) => handleCredentialChange('apiKey', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Your BeyondBancard API Key"
-                />
-                <p className="text-xs text-gray-500 mt-1">Found in your BeyondBancard dashboard under API Settings</p>
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4">
+                <p className="text-sm text-blue-800">
+                  <strong>ℹ️ NMI Integration:</strong> BeyondBancard is powered by NMI. Use NMI credentials below.
+                </p>
               </div>
+              
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">API Secret</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Security Key (API Key)</label>
                 <input
                   type="password"
-                  value={formData.credentials.apiSecret || ''}
-                  onChange={(e) => handleCredentialChange('apiSecret', e.target.value)}
+                  value={formData.credentials.security_key || ''}
+                  onChange={(e) => handleCredentialChange('security_key', e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  placeholder="Your BeyondBancard API Secret"
+                  placeholder="NMI Security Key (from API Settings)"
                 />
-                <p className="text-xs text-gray-500 mt-1">Keep this secure. Never share with untrusted parties</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Your NMI private API key for server-to-server communication. Found in NMI merchant portal under Security Keys → Private.
+                </p>
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Tokenization Key (Public)</label>
+                <input
+                  type="text"
+                  value={formData.credentials.tokenizationKey || ''}
+                  onChange={(e) => handleCredentialChange('tokenizationKey', e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="NMI Tokenization Key (for Collect.js)"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Your NMI public tokenization key for Collect.js. Found in NMI merchant portal under Security Keys → Tokenization.
+                </p>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Mode</label>
                 <select
@@ -514,36 +526,17 @@ export default function Merchants() {
                   <option value="live">Live (Production)</option>
                 </select>
               </div>
-              <div>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (!formData.credentials.apiKey || !formData.credentials.apiSecret) {
-                      toast.error('Please enter API Key and Secret');
-                      return;
-                    }
-                    
-                    try {
-                      const res = await axios.post('/merchants/test-beyondbancard', {
-                        apiKey: formData.credentials.apiKey,
-                        apiSecret: formData.credentials.apiSecret,
-                        mode: formData.credentials.mode || 'sandbox'
-                      });
 
-                      if (res.data.success) {
-                        toast.success('✅ ' + res.data.message);
-                      } else {
-                        toast.error('❌ ' + res.data.message);
-                      }
-                    } catch (err) {
-                      toast.error(err.response?.data?.message || 'Test failed');
-                    }
-                  }}
-                  className="w-full bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
-                >
-                  🧪 Test Credentials
-                </button>
-                <p className="text-xs text-gray-500 mt-1">Test if your BeyondBancard credentials are working</p>
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                <p className="text-xs text-yellow-800 mb-2">
+                  <strong>📋 Where to find credentials:</strong>
+                </p>
+                <ul className="text-xs text-yellow-800 space-y-1 ml-3 list-disc">
+                  <li>Go to NMI Merchant Portal: <code className="bg-white px-1 rounded">merchant.nmi.com</code></li>
+                  <li>Security Settings → API Keys / Security Keys</li>
+                  <li>Copy Private/Security Key for backend</li>
+                  <li>Copy Public/Tokenization Key for frontend</li>
+                </ul>
               </div>
             </>
           )}
