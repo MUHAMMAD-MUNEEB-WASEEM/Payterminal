@@ -387,7 +387,7 @@ export default function Merchants() {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="e.g., 5000.00"
             />
-            <p className="text-xs text-gray-500 mt-1">Maximum amount for a single invoice. Invoices {'>'}= this amount cannot be created. Leave empty for no limit.</p>
+            <p className="text-xs text-gray-500 mt-1">Maximum amount for a single invoice. Invoices greater than or equal to this amount cannot be created. Leave empty for no limit.</p>
           </div>
 
           {formData.gateway === 'stripe' && (
