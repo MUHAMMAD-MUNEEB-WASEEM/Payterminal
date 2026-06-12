@@ -73,6 +73,49 @@ export default function Invoices() {
     }
     return s + amount;
   }, 0);
+  
+  const [ticketSizeError, setTicketSizeError] = useState(null);
+  
+  // Check ticket size when brand or total changes
+  useEffect(() => {
+    if (!form.brandId || total <= 0) {
+      setTicketSizeError(null);
+      return;
+    }
+    
+    // Find merchants for this brand and check ticket sizes
+    const selectedBrand = brands.find(b => b._id === form.brandId);
+    if (!selectedBrand) {
+      setTicketSizeError(null);
+      return;
+    }
+    
+    // Check if invoice total exceeds any merchant's ticket size
+    const checkTicketSizes = async () => {
+      try {
+        const res = await api.get(`/merchants/brand/${form.brandId}`);
+        const merchants = res.data;
+        
+        for (const merchant of merchants) {
+          // Only check if ticket size is set (optional field)
+          if (merchant.ticketSize && merchant.ticketSize > 0 && total >= merchant.ticketSize) {
+            setTicketSizeError({
+              merchantName: merchant.nickname,
+              ticketSize: merchant.ticketSize,
+              currentTotal: total
+            });
+            return;
+          }
+        }
+        setTicketSizeError(null);
+      } catch (err) {
+        console.error('Error checking ticket size:', err);
+        setTicketSizeError(null);
+      }
+    };
+    
+    checkTicketSizes();
+  }, [total, form.brandId, brands]);
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -82,6 +125,11 @@ export default function Invoices() {
     if (!form.customerName) return toast.error('Customer name is required');
     if (!form.customerEmail) return toast.error('Customer email is required');
     if (!form.customerSerialNumber) return toast.error('Customer serial number is required');
+    
+    // Check ticket size violation
+    if (ticketSizeError) {
+      return toast.error(`Invoice total ($${ticketSizeError.currentTotal.toFixed(2)}) exceeds ticket size limit ($${ticketSizeError.ticketSize.toFixed(2)}) for ${ticketSizeError.merchantName}`);
+    }
     
     // Debug: Log what we're sending
     console.log('=== INVOICE CREATION DEBUG ===');
@@ -96,6 +144,7 @@ export default function Invoices() {
       toast.success('Invoice created');
       setShowCreate(false);
       setForm(EMPTY_FORM);
+      setTicketSizeError(null);
       fetchAll();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to create invoice');
@@ -388,10 +437,23 @@ export default function Invoices() {
               <span className="text-sm font-medium text-gray-700">Total Amount</span>
               <span className="text-lg font-bold text-blue-700">USD ${total.toFixed(2)}</span>
             </div>
+            
+            {/* Ticket Size Warning */}
+            {ticketSizeError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+                <p className="text-sm text-red-700">
+                  <span className="font-semibold">⚠️ Ticket Size Limit Exceeded</span>
+                </p>
+                <p className="text-sm text-red-600 mt-1">
+                  Invoice total (<span className="font-medium">USD ${ticketSizeError.currentTotal.toFixed(2)}</span>) exceeds the ticket size limit (<span className="font-medium">USD ${ticketSizeError.ticketSize.toFixed(2)}</span>) for merchant <span className="font-medium">{ticketSizeError.merchantName}</span>.
+                </p>
+                <p className="text-xs text-red-500 mt-2">Please reduce the invoice total to be less than the ticket size limit.</p>
+              </div>
+            )}
 
             <div className="flex gap-3 pt-1">
               <button type="button" onClick={() => setShowCreate(false)} className="flex-1 px-4 py-2.5 border border-gray-300 rounded-lg text-sm font-medium hover:bg-gray-50">Cancel</button>
-              <button type="submit" disabled={saving} className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-lg text-sm font-medium">
+              <button type="submit" disabled={saving || ticketSizeError} className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white px-4 py-2.5 rounded-lg text-sm font-medium">
                 {saving ? 'Creating...' : 'Create Invoice'}
               </button>
             </div>

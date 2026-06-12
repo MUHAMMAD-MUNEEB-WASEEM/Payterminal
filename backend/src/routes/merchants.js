@@ -38,7 +38,7 @@ router.get('/:id', auth, adminOnly, async (req, res) => {
 // Create merchant (admin only)
 router.post('/', auth, adminOnly, async (req, res) => {
   try {
-    const { nickname, gateway, credentials, amountLimit } = req.body;
+    const { nickname, gateway, credentials, amountLimit, ticketSize } = req.body;
     
     if (!nickname || !gateway) {
       return res.status(400).json({ message: 'Nickname and gateway are required' });
@@ -53,6 +53,7 @@ router.post('/', auth, adminOnly, async (req, res) => {
       gateway,
       credentials: credentials || {},
       amountLimit: amountLimit ? Number(amountLimit) : null,
+      ticketSize: ticketSize ? Number(ticketSize) : null,
       processedAmount: 0,
       isActive: true,
       createdAt: new Date().toISOString(),
@@ -68,13 +69,14 @@ router.post('/', auth, adminOnly, async (req, res) => {
 // Update merchant (admin only)
 router.patch('/:id', auth, adminOnly, async (req, res) => {
   try {
-    const { nickname, credentials, isActive, amountLimit, processedAmount } = req.body;
+    const { nickname, credentials, isActive, amountLimit, ticketSize, processedAmount } = req.body;
     const updateData = { updatedAt: new Date().toISOString() };
     
     if (nickname !== undefined) updateData.nickname = nickname;
     if (credentials !== undefined) updateData.credentials = credentials;
     if (isActive !== undefined) updateData.isActive = isActive;
     if (amountLimit !== undefined) updateData.amountLimit = amountLimit ? Number(amountLimit) : null;
+    if (ticketSize !== undefined) updateData.ticketSize = ticketSize ? Number(ticketSize) : null;
     if (processedAmount !== undefined) updateData.processedAmount = Number(processedAmount);
     
     await db.merchants.update({ _id: req.params.id }, { $set: updateData });
@@ -141,6 +143,7 @@ router.get('/brand/:brandId/public', async (req, res) => {
             nickname: merchant.nickname,
             gateway: merchant.gateway,
             isDefault: bm.isDefault || false,
+            ticketSize: merchant.ticketSize || null,
             // Include tokenization key for frontend (safe to expose - it's public)
             tokenizationKey: merchant.credentials?.tokenizationKey || null,
           });

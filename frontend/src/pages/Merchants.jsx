@@ -14,7 +14,8 @@ export default function Merchants() {
     nickname: '',
     gateway: 'stripe',
     credentials: {},
-    amountLimit: ''
+    amountLimit: '',
+    ticketSize: ''
   });
   
   // Brand assignment
@@ -74,7 +75,8 @@ export default function Merchants() {
       nickname: merchant.nickname,
       gateway: merchant.gateway,
       credentials: merchant.credentials?.configured ? {} : merchant.credentials || {},
-      amountLimit: merchant.amountLimit || ''
+      amountLimit: merchant.amountLimit || '',
+      ticketSize: merchant.ticketSize || ''
     });
     setShowModal(true);
   };
@@ -203,7 +205,7 @@ export default function Merchants() {
         <button
           onClick={() => {
             setEditingMerchant(null);
-            setFormData({ nickname: '', gateway: 'stripe', credentials: {}, amountLimit: '' });
+            setFormData({ nickname: '', gateway: 'stripe', credentials: {}, amountLimit: '', ticketSize: '' });
             setShowModal(true);
           }}
           className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 flex items-center gap-2"
@@ -370,6 +372,22 @@ export default function Merchants() {
               placeholder="e.g., 10000.00"
             />
             <p className="text-xs text-gray-500 mt-1">Leave empty for no limit. Merchant will auto-disable when limit is reached.</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Ticket Size (USD) <span className="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={formData.ticketSize}
+              onChange={(e) => setFormData({ ...formData, ticketSize: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="e.g., 5000.00"
+            />
+            <p className="text-xs text-gray-500 mt-1">Maximum amount for a single invoice. Invoices >= this amount cannot be created. Leave empty for no limit.</p>
           </div>
 
           {formData.gateway === 'stripe' && (
