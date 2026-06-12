@@ -302,7 +302,7 @@ export default function Invoices() {
                   <td className="px-6 py-4 font-mono font-medium text-blue-600">{inv.invoiceNumber}</td>
                   <td className="px-6 py-4 text-gray-700">{inv.customerName || '—'}</td>
                   <td className="px-6 py-4 text-gray-700">{inv.brand?.name || '—'}</td>
-                  <td className="px-6 py-4 text-gray-600">{inv.brandNo || <span className="text-gray-400 italic">N/A</span>}</td>
+                  <td className="px-6 py-4 text-gray-600">{inv.brandNo || (<span className="text-gray-400 italic">N/A</span>)}</td>
                   <td className="px-6 py-4 font-semibold">USD ${inv.total?.toFixed(2)}</td>
                   <td className="px-6 py-4">{statusBadge(inv.status, inv.refundAmount, inv.chargebackAmount)}</td>
                   <td className="px-6 py-4">
