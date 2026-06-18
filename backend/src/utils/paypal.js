@@ -1,9 +1,11 @@
-const checkoutNodeJssdk = require('@paypal/checkout-server-sdk');
+const axios = require('axios');
 
 /**
- * Process payment with PayPal
+ * Process payment with PayPal using REST API v2
+ * Supports both sandbox (test) and live (production) modes with real card processing
+ * 
  * @param {Object} credentials - Merchant credentials { clientId, clientSecret, mode }
- * @param {Object} paymentData - { amount, currency, cardNumber, cardHolder, expiryMonth, expiryYear, cvv, description }
+ * @param {Object} paymentData - { amount, currency, cardNumber, cardHolder, expiryMonth, expiryYear, cvv, description, firstName, lastName, companyName, addressLine1, addressLine2, city, state, postalCode, countryCode }
  * @returns {Object} { success, transactionId, error }
  */
 async function processPayPalPayment(credentials, paymentData) {
@@ -20,171 +22,302 @@ async function processPayPalPayment(credentials, paymentData) {
       };
     }
 
-    // Create PayPal environment
-    const environment = credentials.mode === 'live'
-      ? new checkoutNodeJssdk.LiveEnvironment(credentials.clientId, credentials.clientSecret)
-      : new checkoutNodeJssdk.SandboxEnvironment(credentials.clientId, credentials.clientSecret);
+    // Set PayPal API endpoint based on mode
+    const apiEndpoint = credentials.mode === 'live'
+      ? 'https://api.paypal.com'
+      : 'https://api.sandbox.paypal.com';
 
-    const client = new checkoutNodeJssdk.PayPalHttpClient(environment);
+    console.log('🅿️  PayPal endpoint:', apiEndpoint);
+    console.log('🔐 Mode:', credentials.mode === 'live' ? 'LIVE (Real transactions)' : 'SANDBOX (Test mode)');
 
-    // Parse cardholder name
-    const nameParts = paymentData.cardHolder.split(' ');
-    const firstName = nameParts[0] || 'Customer';
-    const lastName = nameParts.slice(1).join(' ') || '';
+    // Step 1: Get OAuth access token
+    console.log('📤 Authenticating with PayPal...');
+    
+    let tokenResponse;
+    try {
+      tokenResponse = await axios.post(
+        `${apiEndpoint}/v1/oauth2/token`,
+        'grant_type=client_credentials',
+        {
+          auth: {
+            username: credentials.clientId,
+            password: credentials.clientSecret
+          },
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
+        }
+      );
+    } catch (tokenErr) {
+      console.error('❌ PayPal authentication failed');
+      const errData = tokenErr.response?.data;
+      console.error('Error:', errData?.error_description || tokenErr.message);
+      
+      return {
+        success: false,
+        error: `PayPal authentication failed: ${errData?.error_description || tokenErr.message}`,
+        errorCode: 'AUTH_FAILED'
+      };
+    }
 
-    // Create payment request
-    const request = new checkoutNodeJssdk.orders.OrdersCreateRequest();
-    request.prefer('return=representation');
-    request.requestBody({
+    const accessToken = tokenResponse.data.access_token;
+    console.log('✅ Authentication successful');
+
+    // Step 2: Validate card data
+    const cardNumber = paymentData.cardNumber.replace(/\s/g, '');
+    const cvv = String(paymentData.cvv).trim();
+    const expiryMonth = String(paymentData.expiryMonth).padStart(2, '0');
+    const expiryYear = String(paymentData.expiryYear).slice(-2); // Get last 2 digits for MM/YY format
+
+    // Validate card format
+    if (!/^\d{13,19}$/.test(cardNumber)) {
+      console.error('❌ Invalid card number format');
+      return {
+        success: false,
+        error: 'Invalid card number format (must be 13-19 digits)',
+        errorCode: 'INVALID_CARD'
+      };
+    }
+
+    if (!/^\d{3,4}$/.test(cvv)) {
+      console.error('❌ Invalid CVV format');
+      return {
+        success: false,
+        error: 'Invalid CVV format',
+        errorCode: 'INVALID_CVV'
+      };
+    }
+
+    // Validate expiry is in future
+    const fullExpiryYear = paymentData.expiryYear.length === 2 
+      ? '20' + paymentData.expiryYear 
+      : paymentData.expiryYear;
+    const expiryDate = new Date(parseInt(fullExpiryYear), parseInt(expiryMonth) - 1);
+    const now = new Date();
+    if (expiryDate < now) {
+      console.error('❌ Card expired');
+      return {
+        success: false,
+        error: 'Card has expired',
+        errorCode: 'CARD_EXPIRED'
+      };
+    }
+
+    console.log('✅ Card validation passed');
+
+    // Step 3: Create order with card payment source
+    console.log('📤 Creating PayPal order with card payment...');
+
+    const amountValue = Number(paymentData.amount).toFixed(2);
+
+    // PayPal requires expiry in YYYY-MM format (not MM/YY or MM/YYYY)
+    const fullYear = paymentData.expiryYear.length === 2 
+      ? '20' + paymentData.expiryYear 
+      : paymentData.expiryYear;
+    const expiryFormatted = `${fullYear}-${expiryMonth}`; // YYYY-MM format required by PayPal
+
+    // Build billing address if provided
+    const billingAddress = {};
+    if (paymentData.addressLine1) {
+      billingAddress.address_line_1 = paymentData.addressLine1;
+    }
+    if (paymentData.addressLine2) {
+      billingAddress.address_line_2 = paymentData.addressLine2;
+    }
+    if (paymentData.city) {
+      billingAddress.admin_area_2 = paymentData.city; // City
+    }
+    if (paymentData.state) {
+      billingAddress.admin_area_1 = paymentData.state; // State
+    }
+    if (paymentData.postalCode) {
+      billingAddress.postal_code = paymentData.postalCode;
+    }
+    if (paymentData.countryCode) {
+      billingAddress.country_code = paymentData.countryCode; // ISO 3166-1 alpha-2 (e.g., "US")
+    }
+
+    // Build cardholder name object - PayPal requires BOTH given_name AND surname if name is provided
+    // NOTE: For direct card payments, PayPal does NOT accept the name field in card object
+    // The name is used for internal validation only
+    const cardholderName = {};
+    if (paymentData.firstName && paymentData.lastName) {
+      cardholderName.given_name = paymentData.firstName;
+      cardholderName.surname = paymentData.lastName;
+    }
+
+    // Build card payment source
+    const cardPaymentSource = {
+      number: cardNumber,
+      expiry: expiryFormatted, // PayPal format: YYYY-MM (e.g., "2025-12")
+      security_code: cvv
+    };
+
+    // DO NOT add name to card object - PayPal rejects it for direct card payments
+    // The name field is not supported in card payment source for orders API
+
+    // Add billing address if provided
+    if (Object.keys(billingAddress).length > 0) {
+      cardPaymentSource.billing_address = billingAddress;
+    }
+
+    // Simplified payload - only required fields for card processing
+    const orderPayload = {
       intent: 'CAPTURE',
       purchase_units: [
         {
+          reference_id: paymentData.invoiceNumber || 'default',
+          description: paymentData.description || `Invoice ${paymentData.invoiceNumber}`,
+          custom_id: paymentData.invoiceNumber || '',
+          invoice_id: paymentData.invoiceNumber || '',
           amount: {
             currency_code: paymentData.currency || 'USD',
-            value: String(paymentData.amount), // Send as string decimal
-            breakdown: {
-              item_total: {
-                currency_code: paymentData.currency || 'USD',
-                value: String(paymentData.amount)
-              }
-            }
-          },
-          items: [
-            {
-              name: paymentData.description || 'Invoice Payment',
-              description: paymentData.description || 'Invoice Payment',
-              quantity: '1',
-              unit_amount: {
-                currency_code: paymentData.currency || 'USD',
-                value: String(paymentData.amount)
-              }
-            }
-          ],
-          description: paymentData.description || 'Invoice Payment'
+            value: amountValue
+          }
         }
       ],
-      payer: {
-        name: {
-          given_name: firstName,
-          surname: lastName || 'Customer'
-        }
-      },
       payment_source: {
-        card: {
-          number: paymentData.cardNumber.replace(/\s/g, ''),
-          expiry: `${String(paymentData.expiryMonth).padStart(2, '0')}/${paymentData.expiryYear}`,
-          cvv: String(paymentData.cvv),
-          name: {
-            given_name: firstName,
-            surname: lastName || 'Customer'
+        card: cardPaymentSource
+      }
+    };
+
+    console.log('📋 Order details:');
+    console.log('  Amount:', amountValue, paymentData.currency);
+    console.log('  Card:', cardNumber.slice(0, 4) + '****' + cardNumber.slice(-4));
+    console.log('  Cardholder:', paymentData.cardHolder);
+    console.log('  Expiry (formatted):', expiryFormatted);
+    console.log('  Name:', paymentData.firstName, paymentData.lastName);
+    console.log('  Company:', paymentData.companyName || 'N/A');
+    console.log('  Address:', paymentData.addressLine1, paymentData.city, paymentData.state, paymentData.postalCode);
+    console.log('📤 Sending order payload:', JSON.stringify(orderPayload, null, 2));
+
+    let orderResponse;
+    try {
+      orderResponse = await axios.post(
+        `${apiEndpoint}/v2/checkout/orders`,
+        orderPayload,
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'PayPal-Request-Id': `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
           }
         }
-      }
-    });
+      );
+    } catch (orderErr) {
+      console.error('❌ Order creation failed');
+      const errData = orderErr.response?.data;
+      console.error('Status:', orderErr.response?.status);
+      console.error('Response:', JSON.stringify(errData, null, 2));
 
-    console.log('📤 Sending PayPal request...');
-    console.log('Amount:', paymentData.amount, paymentData.currency);
-
-    let response;
-    try {
-      response = await client.execute(request);
-      console.log('✅ PayPal response received - Status:', response.statusCode);
-    } catch (executeError) {
-      console.error('❌ PayPal API error:', executeError.message);
-      console.error('Error details:', executeError.details || executeError);
-      
-      // Extract error message
-      let errorMessage = 'Payment processing failed';
-      if (executeError.details && executeError.details[0]) {
-        errorMessage = executeError.details[0].issue || executeError.message;
-      } else if (executeError.message) {
-        errorMessage = executeError.message;
+      // Parse PayPal error response
+      let errorMessage = 'Order creation failed';
+      if (errData?.details && Array.isArray(errData.details)) {
+        errorMessage = errData.details
+          .map(d => d.issue || d.description || d.field)
+          .filter(Boolean)
+          .join('; ');
+      } else if (errData?.message) {
+        errorMessage = errData.message;
+      } else if (errData?.name) {
+        errorMessage = errData.name;
       }
 
       return {
         success: false,
-        error: `PayPal error: ${errorMessage}`,
-        errorCode: executeError.statusCode || 'PAYMENT_ERROR'
+        error: `PayPal order creation failed: ${errorMessage}`,
+        errorCode: 'ORDER_CREATION_FAILED',
+        details: errData
       };
     }
 
-    // Check response status
-    if (response.statusCode === 201 || response.statusCode === 200) {
-      const order = response.result;
-      
-      console.log('✅ Order created:', order.id);
-      console.log('Order status:', order.status);
+    const orderId = orderResponse.data.id;
+    const orderStatus = orderResponse.data.status;
+    console.log('✅ Order created:', orderId);
+    console.log('   Status:', orderStatus);
 
-      // For card payments, we typically need to capture immediately
-      const captureRequest = new checkoutNodeJssdk.orders.OrdersCaptureRequest(order.id);
-      captureRequest.requestBody({});
+    // Check if order is already completed/captured
+    let transactionId = orderId;
+    let captureResponse = orderResponse.data;
 
-      console.log('📤 Capturing payment...');
+    // If order status is COMPLETED, it was auto-captured (common with card payments)
+    if (orderStatus === 'COMPLETED') {
+      console.log('✅ Order auto-captured by PayPal');
       
-      let captureResponse;
-      try {
-        captureResponse = await client.execute(captureRequest);
-        console.log('✅ Payment captured - Status:', captureResponse.statusCode);
-      } catch (captureError) {
-        console.error('❌ Capture error:', captureError.message);
-        
-        let errorMessage = 'Payment capture failed';
-        if (captureError.details && captureError.details[0]) {
-          errorMessage = captureError.details[0].issue || captureError.message;
+      // Extract transaction ID from the order response
+      if (orderResponse.data.purchase_units && orderResponse.data.purchase_units[0]) {
+        const payments = orderResponse.data.purchase_units[0].payments;
+        if (payments && payments.captures && payments.captures[0]) {
+          transactionId = payments.captures[0].id;
+          console.log('   Transaction ID:', transactionId);
         }
-
-        return {
-          success: false,
-          error: `PayPal capture failed: ${errorMessage}`,
-          errorCode: 'CAPTURE_FAILED'
-        };
       }
+    } else {
+      // Step 4: Capture the order manually (for non-auto-captured orders)
+      console.log('📤 Capturing payment...');
 
-      if (captureResponse.statusCode === 201 || captureResponse.statusCode === 200) {
-        const capturedOrder = captureResponse.result;
+      try {
+        captureResponse = await axios.post(
+          `${apiEndpoint}/v2/checkout/orders/${orderId}/capture`,
+          {},
+          {
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json'
+            }
+          }
+        );
         
-        // Get transaction ID from purchase units
-        let transactionId = capturedOrder.id;
-        if (capturedOrder.purchase_units && capturedOrder.purchase_units[0]) {
-          const payments = capturedOrder.purchase_units[0].payments;
+        console.log('✅ Order captured manually');
+        
+        // Extract transaction ID from capture response
+        if (captureResponse.data.purchase_units && captureResponse.data.purchase_units[0]) {
+          const payments = captureResponse.data.purchase_units[0].payments;
           if (payments && payments.captures && payments.captures[0]) {
             transactionId = payments.captures[0].id;
+            console.log('   Transaction ID:', transactionId);
           }
         }
+      } catch (captureErr) {
+        console.error('❌ Payment capture failed');
+        const errData = captureErr.response?.data;
+        console.error('Status:', captureErr.response?.status);
+        console.error('Response:', JSON.stringify(errData, null, 2));
 
-        console.log('✅ Payment successful! Transaction ID:', transactionId);
-        
-        return {
-          success: true,
-          transactionId: transactionId,
-          message: 'Payment processed successfully',
-          reference: transactionId,
-          orderId: capturedOrder.id
-        };
-      } else {
-        console.error('❌ Unexpected capture response status:', captureResponse.statusCode);
+        let errorMessage = 'Payment capture failed';
+        if (errData?.details && Array.isArray(errData.details)) {
+          errorMessage = errData.details
+            .map(d => d.issue || d.description)
+            .filter(Boolean)
+            .join('; ');
+        } else if (errData?.message) {
+          errorMessage = errData.message;
+        }
+
         return {
           success: false,
-          error: 'Unexpected PayPal response during capture',
-          errorCode: 'UNEXPECTED_RESPONSE'
+          error: `PayPal payment capture failed: ${errorMessage}`,
+          errorCode: 'CAPTURE_FAILED',
+          details: errData
         };
       }
-    } else if (response.statusCode === 422) {
-      // Unprocessable Entity - validation error
-      console.error('❌ Validation error in request');
-      return {
-        success: false,
-        error: 'Invalid payment data provided',
-        errorCode: 'VALIDATION_ERROR'
-      };
-    } else {
-      console.error('❌ Unexpected response status:', response.statusCode);
-      return {
-        success: false,
-        error: `PayPal returned status ${response.statusCode}`,
-        errorCode: 'UNEXPECTED_STATUS'
-      };
     }
+
+    console.log('✅ Payment successful!');
+    console.log('   Transaction ID:', transactionId);
+    console.log('   Order ID:', orderId);
+    
+    return {
+      success: true,
+      transactionId: transactionId,
+      message: 'Payment processed successfully',
+      reference: transactionId,
+      orderId: orderId,
+      mode: credentials.mode,
+      amount: amountValue,
+      currency: paymentData.currency || 'USD'
+    };
+
   } catch (error) {
     console.error('🅿️  PayPal payment error:', error.message);
     console.error('Stack:', error.stack);

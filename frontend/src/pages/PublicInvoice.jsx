@@ -33,6 +33,15 @@ export default function PublicInvoice() {
     expiryMonth: '',
     expiryYear: '',
     cvv: '',
+    firstName: '',
+    lastName: '',
+    companyName: '',
+    addressLine1: '',
+    addressLine2: '',
+    city: '',
+    state: '',
+    postalCode: '',
+    countryCode: 'US',
   });
   const [paying, setPaying] = useState(false);
   const [collectJsReady, setCollectJsReady] = useState(false);
@@ -203,6 +212,15 @@ export default function PublicInvoice() {
           expiryYear: cardData.expiryYear,
           cvv: cardData.cvv,
           merchantId: selectedMerchant._id,
+          firstName: cardData.firstName,
+          lastName: cardData.lastName,
+          companyName: cardData.companyName,
+          addressLine1: cardData.addressLine1,
+          addressLine2: cardData.addressLine2,
+          city: cardData.city,
+          state: cardData.state,
+          postalCode: cardData.postalCode,
+          countryCode: cardData.countryCode,
         };
         
         console.log('=== PAYMENT REQUEST (RAW CARD) ===');
@@ -256,6 +274,15 @@ export default function PublicInvoice() {
         expiryYear: cardData.expiryYear,
         cvv: cardData.cvv,
         merchantId: selectedMerchant._id,
+        firstName: cardData.firstName,
+        lastName: cardData.lastName,
+        companyName: cardData.companyName,
+        addressLine1: cardData.addressLine1,
+        addressLine2: cardData.addressLine2,
+        city: cardData.city,
+        state: cardData.state,
+        postalCode: cardData.postalCode,
+        countryCode: cardData.countryCode,
       };
       
       console.log('=== PAYMENT REQUEST ===');
@@ -481,72 +508,195 @@ export default function PublicInvoice() {
                 </div>
 
                 <form onSubmit={handlePayment} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Name on Card</label>
-                    <input
-                      type="text"
-                      required
-                      value={cardData.cardHolder}
-                      onChange={(e) => handleCardChange('cardHolder', e.target.value)}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="John Doe"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Card Number</label>
-                    <input
-                      type="text"
-                      required
-                      value={cardData.cardNumber}
-                      onChange={(e) => handleCardChange('cardNumber', e.target.value)}
-                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="1234 5678 9012 3456"
-                      maxLength="19"
-                    />
-                    <div className="flex gap-4 mt-3">
-                      <img src="https://cdn.worldvectorlogo.com/logos/visa-4.svg" alt="Visa" className="h-8 w-auto" />
-                      <img src="https://cdn.worldvectorlogo.com/logos/mastercard-6.svg" alt="Mastercard" className="h-8 w-auto" />
-                      <img src="https://cdn.worldvectorlogo.com/logos/american-express-3.svg" alt="Amex" className="h-8 w-auto" />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Expiration Date</label>
-                      <div className="flex gap-2">
+                  {/* Billing Information Section */}
+                  <div className="border-b pb-4">
+                    <h4 className="font-semibold text-gray-900 mb-3">Billing Information</h4>
+                    
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
                         <input
                           type="text"
                           required
-                          value={cardData.expiryMonth}
-                          onChange={(e) => handleCardChange('expiryMonth', e.target.value)}
+                          value={cardData.firstName}
+                          onChange={(e) => setCardData({ ...cardData, firstName: e.target.value })}
                           className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          placeholder="MM"
-                          maxLength="2"
+                          placeholder="John"
                         />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
                         <input
                           type="text"
                           required
-                          value={cardData.expiryYear}
-                          onChange={(e) => handleCardChange('expiryYear', e.target.value)}
+                          value={cardData.lastName}
+                          onChange={(e) => setCardData({ ...cardData, lastName: e.target.value })}
                           className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          placeholder="YYYY"
-                          maxLength="4"
+                          placeholder="Doe"
                         />
                       </div>
                     </div>
 
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">CVV</label>
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Company Name (Optional)</label>
+                      <input
+                        type="text"
+                        value={cardData.companyName}
+                        onChange={(e) => setCardData({ ...cardData, companyName: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="Company Inc."
+                      />
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Address Line 1 *</label>
                       <input
                         type="text"
                         required
-                        value={cardData.cvv}
-                        onChange={(e) => handleCardChange('cvv', e.target.value)}
+                        value={cardData.addressLine1}
+                        onChange={(e) => setCardData({ ...cardData, addressLine1: e.target.value })}
                         className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        placeholder="123"
-                        maxLength="4"
+                        placeholder="123 Main Street"
                       />
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Address Line 2 (Optional)</label>
+                      <input
+                        type="text"
+                        value={cardData.addressLine2}
+                        onChange={(e) => setCardData({ ...cardData, addressLine2: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="Apt 4B"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">City *</label>
+                        <input
+                          type="text"
+                          required
+                          value={cardData.city}
+                          onChange={(e) => setCardData({ ...cardData, city: e.target.value })}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="New York"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">State *</label>
+                        <input
+                          type="text"
+                          required
+                          value={cardData.state}
+                          onChange={(e) => setCardData({ ...cardData, state: e.target.value })}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="NY"
+                          maxLength="2"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code *</label>
+                        <input
+                          type="text"
+                          required
+                          value={cardData.postalCode}
+                          onChange={(e) => setCardData({ ...cardData, postalCode: e.target.value })}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="10001"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Country *</label>
+                        <select
+                          required
+                          value={cardData.countryCode}
+                          onChange={(e) => setCardData({ ...cardData, countryCode: e.target.value })}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        >
+                          <option value="US">United States</option>
+                          <option value="CA">Canada</option>
+                          <option value="GB">United Kingdom</option>
+                          <option value="AU">Australia</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card Details Section */}
+                  <div>
+                    <h4 className="font-semibold text-gray-900 mb-3">Card Details</h4>
+                    
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Name on Card *</label>
+                      <input
+                        type="text"
+                        required
+                        value={cardData.cardHolder}
+                        onChange={(e) => handleCardChange('cardHolder', e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="John Doe"
+                      />
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Card Number *</label>
+                      <input
+                        type="text"
+                        required
+                        value={cardData.cardNumber}
+                        onChange={(e) => handleCardChange('cardNumber', e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="1234 5678 9012 3456"
+                        maxLength="19"
+                      />
+                      <div className="flex gap-4 mt-3">
+                        <img src="https://cdn.worldvectorlogo.com/logos/visa-4.svg" alt="Visa" className="h-8 w-auto" />
+                        <img src="https://cdn.worldvectorlogo.com/logos/mastercard-6.svg" alt="Mastercard" className="h-8 w-auto" />
+                        <img src="https://cdn.worldvectorlogo.com/logos/american-express-3.svg" alt="Amex" className="h-8 w-auto" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Expiration Date *</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            required
+                            value={cardData.expiryMonth}
+                            onChange={(e) => handleCardChange('expiryMonth', e.target.value)}
+                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            placeholder="MM"
+                            maxLength="2"
+                          />
+                          <input
+                            type="text"
+                            required
+                            value={cardData.expiryYear}
+                            onChange={(e) => handleCardChange('expiryYear', e.target.value)}
+                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                            placeholder="YYYY"
+                            maxLength="4"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">CVV *</label>
+                        <input
+                          type="text"
+                          required
+                          value={cardData.cvv}
+                          onChange={(e) => handleCardChange('cvv', e.target.value)}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="123"
+                          maxLength="4"
+                        />
+                      </div>
                     </div>
                   </div>
 

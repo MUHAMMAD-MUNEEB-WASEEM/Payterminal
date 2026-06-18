@@ -148,7 +148,23 @@ router.post('/public/:id/pay', async (req, res) => {
     logToFile('\n========== PAYMENT REQUEST RECEIVED ==========');
     
     // Get request data
-    const { cardNumber, cardHolder, expiryMonth, expiryYear, cvv, merchantId } = req.body;
+    const { 
+      cardNumber, 
+      cardHolder, 
+      expiryMonth, 
+      expiryYear, 
+      cvv, 
+      merchantId,
+      firstName,
+      lastName,
+      companyName,
+      addressLine1,
+      addressLine2,
+      city,
+      state,
+      postalCode,
+      countryCode
+    } = req.body;
     
     console.log('Request data received:', {
       hasCardNumber: !!cardNumber,
@@ -156,9 +172,16 @@ router.post('/public/:id/pay', async (req, res) => {
       expiryMonth,
       expiryYear,
       hasCvv: !!cvv,
-      merchantId
+      merchantId,
+      firstName,
+      lastName,
+      companyName,
+      city,
+      state,
+      postalCode,
+      countryCode
     });
-    logToFile(`Request: cardHolder=${cardHolder}, expiryMonth=${expiryMonth}, expiryYear=${expiryYear}, merchantId=${merchantId}`);
+    logToFile(`Request: cardHolder=${cardHolder}, firstName=${firstName}, lastName=${lastName}, city=${city}, merchantId=${merchantId}`);
     
     // Get invoice
     const invoice = await db.invoices.findOne({ _id: req.params.id });
@@ -210,6 +233,16 @@ router.post('/public/:id/pay', async (req, res) => {
       expiryYear: String(expiryYear),
       cvv,
       description: `Invoice ${invoice.invoiceNumber}`,
+      invoiceNumber: invoice.invoiceNumber,
+      firstName,
+      lastName,
+      companyName,
+      addressLine1,
+      addressLine2,
+      city,
+      state,
+      postalCode,
+      countryCode: countryCode || 'US',
     };
     
     console.log('Payment data prepared:', {
