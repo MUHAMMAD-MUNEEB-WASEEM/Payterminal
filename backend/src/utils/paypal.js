@@ -169,7 +169,8 @@ async function processPayPalPayment(credentials, paymentData) {
           reference_id: paymentData.invoiceNumber || 'default',
           description: paymentData.description || `Invoice ${paymentData.invoiceNumber}`,
           custom_id: paymentData.invoiceNumber || '',
-          invoice_id: paymentData.invoiceNumber || '',
+          // Don't send invoice_id to avoid duplicate errors when retrying payments
+          // invoice_id: paymentData.invoiceNumber || '',
           amount: {
             currency_code: paymentData.currency || 'USD',
             value: amountValue
@@ -244,12 +245,46 @@ async function processPayPalPayment(credentials, paymentData) {
     if (orderStatus === 'COMPLETED') {
       console.log('✅ Order auto-captured by PayPal');
       
-      // Extract transaction ID from the order response
+      // Extract transaction ID and check capture status
       if (orderResponse.data.purchase_units && orderResponse.data.purchase_units[0]) {
         const payments = orderResponse.data.purchase_units[0].payments;
         if (payments && payments.captures && payments.captures[0]) {
-          transactionId = payments.captures[0].id;
+          const capture = payments.captures[0];
+          transactionId = capture.id;
+          const captureStatus = capture.status;
+          
           console.log('   Transaction ID:', transactionId);
+          console.log('   Capture Status:', captureStatus);
+          
+          // Check if capture was actually successful
+          if (captureStatus === 'DECLINED') {
+            console.error('❌ Payment capture was declined by processor');
+            const processorResponse = capture.processor_response || {};
+            const declineReason = processorResponse.response_code || 'Unknown reason';
+            
+            return {
+              success: false,
+              error: `Payment declined by card processor (Code: ${declineReason})`,
+              errorCode: 'PAYMENT_DECLINED',
+              details: {
+                captureId: transactionId,
+                captureStatus,
+                processorResponse
+              }
+            };
+          } else if (captureStatus !== 'COMPLETED') {
+            console.error('❌ Unexpected capture status:', captureStatus);
+            
+            return {
+              success: false,
+              error: `Payment capture failed with status: ${captureStatus}`,
+              errorCode: 'CAPTURE_FAILED',
+              details: {
+                captureId: transactionId,
+                captureStatus
+              }
+            };
+          }
         }
       }
     } else {
@@ -270,12 +305,46 @@ async function processPayPalPayment(credentials, paymentData) {
         
         console.log('✅ Order captured manually');
         
-        // Extract transaction ID from capture response
+        // Extract transaction ID and check status from manual capture response
         if (captureResponse.data.purchase_units && captureResponse.data.purchase_units[0]) {
           const payments = captureResponse.data.purchase_units[0].payments;
           if (payments && payments.captures && payments.captures[0]) {
-            transactionId = payments.captures[0].id;
+            const capture = payments.captures[0];
+            transactionId = capture.id;
+            const captureStatus = capture.status;
+            
             console.log('   Transaction ID:', transactionId);
+            console.log('   Capture Status:', captureStatus);
+            
+            // Check if manual capture was successful
+            if (captureStatus === 'DECLINED') {
+              console.error('❌ Payment capture was declined by processor');
+              const processorResponse = capture.processor_response || {};
+              const declineReason = processorResponse.response_code || 'Unknown reason';
+              
+              return {
+                success: false,
+                error: `Payment declined by card processor (Code: ${declineReason})`,
+                errorCode: 'PAYMENT_DECLINED',
+                details: {
+                  captureId: transactionId,
+                  captureStatus,
+                  processorResponse
+                }
+              };
+            } else if (captureStatus !== 'COMPLETED') {
+              console.error('❌ Unexpected capture status:', captureStatus);
+              
+              return {
+                success: false,
+                error: `Payment capture failed with status: ${captureStatus}`,
+                errorCode: 'CAPTURE_FAILED',
+                details: {
+                  captureId: transactionId,
+                  captureStatus
+                }
+              };
+            }
           }
         }
       } catch (captureErr) {

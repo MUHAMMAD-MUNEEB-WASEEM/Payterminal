@@ -344,6 +344,20 @@ router.post('/public/:id/pay', async (req, res) => {
             status: 'paid', 
             paymentOrderRef: result.transactionId,
             selectedMerchantId: merchantId,
+            billingDetails: {
+              firstName,
+              lastName,
+              companyName,
+              addressLine1,
+              addressLine2,
+              city,
+              state,
+              postalCode,
+              countryCode,
+              cardholderName: cardHolder,
+              cardLast4: cardNumber ? cardNumber.slice(-4) : null,
+              paymentGateway: merchant.gateway
+            },
             updatedAt: new Date().toISOString()
           } 
         }
@@ -425,6 +439,74 @@ router.post('/public/:id/pay', async (req, res) => {
   }
 });
 
+// Specific routes must come BEFORE generic :id route
+router.get('/:id/status', auth, async (req, res) => {
+  try {
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
+
+    if (invoice.paymentOrderRef) {
+      try {
+        const order = await getOrderStatus(invoice.paymentOrderRef);
+        const ngStatus = order.status || order._embedded?.payment?.[0]?.state;
+        let newStatus = invoice.status;
+        if (ngStatus === 'CAPTURED' || ngStatus === 'AUTHORISED') newStatus = 'paid';
+        else if (ngStatus === 'FAILED' || ngStatus === 'CANCELLED') newStatus = 'failed';
+        if (newStatus !== invoice.status) {
+          await db.invoices.update({ _id: invoice._id }, { $set: { status: newStatus } });
+          invoice.status = newStatus;
+        }
+      } catch (e) {
+        console.error('Status check error:', e.message);
+      }
+    }
+
+    res.json({ status: invoice.status, invoice: await withBrand(invoice) });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+router.get('/:id/billing', auth, adminOnly, async (req, res) => {
+  try {
+    console.log('📋 BILLING DETAILS REQUEST:', req.params.id);
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    
+    if (!invoice) {
+      console.log('❌ Invoice not found:', req.params.id);
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
+    
+    console.log('✅ Invoice found:', {
+      invoiceNumber: invoice.invoiceNumber,
+      status: invoice.status,
+      hasBillingDetails: !!invoice.billingDetails
+    });
+    
+    // Return invoice with billing details
+    const result = await withBrand(invoice);
+    const response = {
+      invoiceId: invoice._id,
+      invoiceNumber: invoice.invoiceNumber,
+      customerName: invoice.customerName,
+      customerEmail: invoice.customerEmail,
+      customerSerialNumber: invoice.customerSerialNumber,
+      amount: invoice.total,
+      status: invoice.status,
+      billingDetails: invoice.billingDetails || null,
+      paymentDate: invoice.updatedAt,
+      brand: result.brand
+    };
+    
+    console.log('📤 Sending response:', JSON.stringify(response, null, 2));
+    res.json(response);
+  } catch (err) {
+    console.error('❌ BILLING DETAILS ERROR:', err.message, err.stack);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// GENERIC :id route must come AFTER specific routes
 router.get('/:id', auth, async (req, res) => {
   try {
     const invoice = await db.invoices.findOne({ _id: req.params.id });
@@ -521,37 +603,13 @@ router.post('/:id/pay', auth, adminOnly, async (req, res) => {
   }
 });
 
-router.get('/:id/status', auth, async (req, res) => {
-  try {
-    const invoice = await db.invoices.findOne({ _id: req.params.id });
-    if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
+// Specific routes for /:id with operation names
 
-    if (invoice.paymentOrderRef) {
-      try {
-        const order = await getOrderStatus(invoice.paymentOrderRef);
-        const ngStatus = order.status || order._embedded?.payment?.[0]?.state;
-        let newStatus = invoice.status;
-        if (ngStatus === 'CAPTURED' || ngStatus === 'AUTHORISED') newStatus = 'paid';
-        else if (ngStatus === 'FAILED' || ngStatus === 'CANCELLED') newStatus = 'failed';
-        if (newStatus !== invoice.status) {
-          await db.invoices.update({ _id: invoice._id }, { $set: { status: newStatus } });
-          invoice.status = newStatus;
-        }
-      } catch (e) {
-        console.error('Status check error:', e.message);
-      }
-    }
-
-    res.json({ status: invoice.status, invoice: await withBrand(invoice) });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
 
 router.patch('/:id/status', auth, adminOnly, async (req, res) => {
   try {
     const { status } = req.body;
-    if (!['pending', 'paid', 'failed', 'refunded', 'chargebacked'].includes(status)) {
+    if (!['pending', 'paid', 'failed', 'refunded', 'chargebacked', 'reversed'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status' });
     }
     await db.invoices.update({ _id: req.params.id }, { $set: { status } });
@@ -585,6 +643,89 @@ router.patch('/:id/refund', auth, adminOnly, async (req, res) => {
       { _id: req.params.id },
       { $set: { refundAmount, status: 'refunded', updatedAt: new Date().toISOString() } }
     );
+    
+    const updatedInvoice = await db.invoices.findOne({ _id: req.params.id });
+    res.json(await withBrand(updatedInvoice));
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin: Reverse payment (change paid invoice back to pending)
+router.patch('/:id/reverse', auth, adminOnly, async (req, res) => {
+  try {
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
+    
+    if (invoice.status !== 'paid') {
+      return res.status(400).json({ message: 'Only paid invoices can be reversed' });
+    }
+    
+    // Update invoice to reversed status
+    await db.invoices.update(
+      { _id: req.params.id },
+      { 
+        $set: { 
+          status: 'reversed',
+          reversedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        } 
+      }
+    );
+    
+    // If merchant tracking was updated, reverse it
+    if (invoice.selectedMerchantId) {
+      const merchant = await db.merchants.findOne({ _id: invoice.selectedMerchantId });
+      if (merchant) {
+        const newProcessedAmount = Math.max(0, (merchant.processedAmount || 0) - invoice.total);
+        await db.merchants.update(
+          { _id: invoice.selectedMerchantId },
+          { $set: { processedAmount: newProcessedAmount, updatedAt: new Date().toISOString() } }
+        );
+      }
+    }
+    
+    const updatedInvoice = await db.invoices.findOne({ _id: req.params.id });
+    res.json(await withBrand(updatedInvoice));
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin: Undo payment (change paid invoice back to pending)
+router.patch('/:id/undo', auth, adminOnly, async (req, res) => {
+  try {
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
+    
+    if (invoice.status !== 'paid') {
+      return res.status(400).json({ message: 'Only paid invoices can be undone' });
+    }
+    
+    // Update invoice back to pending
+    await db.invoices.update(
+      { _id: req.params.id },
+      { 
+        $set: { 
+          status: 'pending',
+          paymentOrderRef: null,
+          selectedMerchantId: null,
+          updatedAt: new Date().toISOString()
+        } 
+      }
+    );
+    
+    // If merchant tracking was updated, reverse it
+    if (invoice.selectedMerchantId) {
+      const merchant = await db.merchants.findOne({ _id: invoice.selectedMerchantId });
+      if (merchant) {
+        const newProcessedAmount = Math.max(0, (merchant.processedAmount || 0) - invoice.total);
+        await db.merchants.update(
+          { _id: invoice.selectedMerchantId },
+          { $set: { processedAmount: newProcessedAmount, updatedAt: new Date().toISOString() } }
+        );
+      }
+    }
     
     const updatedInvoice = await db.invoices.findOne({ _id: req.params.id });
     res.json(await withBrand(updatedInvoice));

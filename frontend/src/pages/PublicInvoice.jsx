@@ -45,6 +45,7 @@ export default function PublicInvoice() {
   });
   const [paying, setPaying] = useState(false);
   const [collectJsReady, setCollectJsReady] = useState(false);
+  const [paymentError, setPaymentError] = useState(null);
 
   useEffect(() => {
     const fetchInvoice = async () => {
@@ -105,6 +106,7 @@ export default function PublicInvoice() {
     }
     
     setPaying(true);
+    setPaymentError(null);
     try {
       const payload = {
         token: token, // Send token instead of raw card data
@@ -140,13 +142,17 @@ export default function PublicInvoice() {
       } else if (res.data.redirect3DS) {
         window.location.href = res.data.redirect3DS;
       } else {
-        toast.error('Payment failed. Please try again.');
+        const errorMsg = res.data.message || 'Payment failed. Please try again.';
+        setPaymentError(errorMsg);
+        toast.error(errorMsg);
       }
     } catch (err) {
       console.error('=== PAYMENT ERROR ===');
       console.error('Error:', err);
       console.error('Response:', err.response?.data);
-      toast.error(err.response?.data?.message || 'Payment failed');
+      const errorMsg = err.response?.data?.message || 'Payment failed';
+      setPaymentError(errorMsg);
+      toast.error(errorMsg);
     } finally {
       setPaying(false);
     }
@@ -203,6 +209,7 @@ export default function PublicInvoice() {
     if (selectedMerchant.gateway === 'beyondbancard') {
       console.log('🔷 Processing BeyondBancard payment with raw card data...');
       setPaying(true);
+      setPaymentError(null);
       
       try {
         const payload = {
@@ -251,13 +258,17 @@ export default function PublicInvoice() {
         } else if (res.data.redirect3DS) {
           window.location.href = res.data.redirect3DS;
         } else {
-          toast.error('Payment failed. Please try again.');
+          const errorMsg = res.data.message || 'Payment failed. Please try again.';
+          setPaymentError(errorMsg);
+          toast.error(errorMsg);
         }
       } catch (err) {
         console.error('=== PAYMENT ERROR ===');
         console.error('Error:', err);
         console.error('Response:', err.response?.data);
-        toast.error(err.response?.data?.message || 'Payment failed');
+        const errorMsg = err.response?.data?.message || 'Payment failed';
+        setPaymentError(errorMsg);
+        toast.error(errorMsg);
       } finally {
         setPaying(false);
       }
@@ -266,6 +277,7 @@ export default function PublicInvoice() {
     
     // For other gateways, send raw card data
     setPaying(true);
+    setPaymentError(null);
     try {
       const payload = {
         cardNumber: cardData.cardNumber.replace(/\s/g, ''),
@@ -327,13 +339,17 @@ export default function PublicInvoice() {
       } else if (res.data.redirect3DS) {
         window.location.href = res.data.redirect3DS;
       } else {
-        toast.error('Payment failed. Please try again.');
+        const errorMsg = res.data.message || 'Payment failed. Please try again.';
+        setPaymentError(errorMsg);
+        toast.error(errorMsg);
       }
     } catch (err) {
       console.error('=== PAYMENT ERROR ===');
       console.error('Error:', err);
       console.error('Response:', err.response?.data);
-      toast.error(err.response?.data?.message || 'Payment failed');
+      const errorMsg = err.response?.data?.message || 'Payment failed';
+      setPaymentError(errorMsg);
+      toast.error(errorMsg);
     } finally {
       setPaying(false);
     }
@@ -708,6 +724,16 @@ export default function PublicInvoice() {
                     <Lock size={18} />
                     {paying ? 'Processing...' : `Pay USD $${invoice.total?.toFixed(2)}`}
                   </button>
+
+                  {paymentError && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
+                      <AlertCircle size={20} className="text-red-600 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-red-900">Payment Failed</p>
+                        <p className="text-sm text-red-700 mt-1">{paymentError}</p>
+                      </div>
+                    </div>
+                  )}
 
                   <p className="text-xs text-gray-500 text-center">
                     Your payment is secure and encrypted

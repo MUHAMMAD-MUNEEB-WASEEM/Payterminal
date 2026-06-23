@@ -4,7 +4,7 @@ import Modal from '../components/Modal';
 import InvoiceView from '../components/InvoiceView';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Eye, Trash2, Link as LinkIcon, FileText, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react';
+import { Plus, Eye, Trash2, Link as LinkIcon, FileText, RefreshCw, CheckCircle, AlertCircle, Undo2, User, MapPin, CreditCard } from 'lucide-react';
 
 const EMPTY_FORM = { 
   brandId: '', 
@@ -29,6 +29,9 @@ export default function Invoices() {
   const [chargebackModal, setChargebackModal] = useState(null);
   const [refundAmount, setRefundAmount] = useState('');
   const [chargebackAmount, setChargebackAmount] = useState('');
+  const [billingDetailsModal, setBillingDetailsModal] = useState(null);
+  const [billingDetails, setBillingDetails] = useState(null);
+  const [loadingBillingDetails, setLoadingBillingDetails] = useState(false);
 
   const fetchAll = async () => {
     try {
@@ -184,6 +187,34 @@ export default function Invoices() {
     }
   };
 
+  const handleReverse = async (invoiceId) => {
+    if (!confirm('Are you sure you want to reverse this payment? This will mark the invoice as reversed and adjust merchant processed amounts.')) {
+      return;
+    }
+    
+    try {
+      await api.patch(`/invoices/${invoiceId}/reverse`);
+      toast.success('Payment reversed successfully');
+      fetchAll();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to reverse payment');
+    }
+  };
+
+  const handleUndo = async (invoiceId) => {
+    if (!confirm('Are you sure you want to undo this payment? This will change the invoice back to pending status.')) {
+      return;
+    }
+    
+    try {
+      await api.patch(`/invoices/${invoiceId}/undo`);
+      toast.success('Payment undone successfully - invoice is now pending');
+      fetchAll();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to undo payment');
+    }
+  };
+
   const handleRefund = async (invoice) => {
     if (!refundAmount || parseFloat(refundAmount) <= 0) {
       toast.error('Enter a valid refund amount');
@@ -221,6 +252,24 @@ export default function Invoices() {
       fetchAll();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to mark invoice as chargebacked');
+    }
+  };
+
+  const handleViewBillingDetails = async (invoiceId) => {
+    setLoadingBillingDetails(true);
+    try {
+      console.log('📋 Fetching billing details for invoice:', invoiceId);
+      const res = await api.get(`/invoices/${invoiceId}/billing`);
+      console.log('✅ Billing details response:', res.data);
+      setBillingDetails(res.data);
+      setBillingDetailsModal(true);
+    } catch (err) {
+      console.error('❌ Error fetching billing details:', err);
+      console.error('Error response:', err.response?.data);
+      console.error('Error status:', err.response?.status);
+      toast.error(err.response?.data?.message || 'Failed to load billing details');
+    } finally {
+      setLoadingBillingDetails(false);
     }
   };
 
@@ -328,8 +377,40 @@ export default function Invoices() {
                         </button>
                       )}
                       {inv.status === 'paid' && (
-                        <span className="p-1.5 text-green-600" title="Paid">
-                          <CheckCircle size={15} />
+                        <>
+                          <span className="p-1.5 text-green-600" title="Paid">
+                            <CheckCircle size={15} />
+                          </span>
+                          <button 
+                            onClick={() => handleViewBillingDetails(inv._id)} 
+                            title="View Customer Details" 
+                            className="p-1.5 rounded-lg hover:bg-purple-50 text-purple-600 transition-colors"
+                          >
+                            <User size={15} />
+                          </button>
+                          {user?.role === 'admin' && (
+                            <>
+                              <button 
+                                onClick={() => handleUndo(inv._id)} 
+                                title="Undo Payment (Back to Pending)" 
+                                className="p-1.5 rounded-lg hover:bg-yellow-50 text-yellow-600 transition-colors"
+                              >
+                                <Undo2 size={15} />
+                              </button>
+                              <button 
+                                onClick={() => handleReverse(inv._id)} 
+                                title="Reverse Payment" 
+                                className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-600 transition-colors"
+                              >
+                                <RefreshCw size={15} />
+                              </button>
+                            </>
+                          )}
+                        </>
+                      )}
+                      {inv.status === 'reversed' && (
+                        <span className="p-1.5 text-blue-600" title="Reversed">
+                          <RefreshCw size={15} />
                         </span>
                       )}
                       {user?.role === 'admin' && ['paid', 'refunded', 'chargebacked'].includes(inv.status) && (
@@ -547,6 +628,138 @@ export default function Invoices() {
                 Confirm Chargeback
               </button>
             </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Billing Details Modal */}
+      <Modal isOpen={billingDetailsModal} title="Customer & Payment Details" onClose={() => { setBillingDetailsModal(false); setBillingDetails(null); }} size="lg">
+        {billingDetails && (
+          <div className="space-y-6">
+            {/* Invoice Info */}
+            <div className="bg-blue-50 rounded-lg p-4">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Invoice Information</h3>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div>
+                  <p className="text-gray-600">Invoice #</p>
+                  <p className="font-mono font-medium text-blue-600">{billingDetails.invoiceNumber}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Amount</p>
+                  <p className="font-bold text-blue-700">USD ${billingDetails.amount?.toFixed(2)}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Status</p>
+                  <p className="font-medium capitalize">{billingDetails.status}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Payment Date</p>
+                  <p className="font-medium">{new Date(billingDetails.paymentDate).toLocaleDateString()}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Customer Info */}
+            <div>
+              <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                <User size={16} /> Customer Information
+              </h3>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-gray-600 text-xs">Name</p>
+                  <p className="font-medium text-gray-900">{billingDetails.customerName}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600 text-xs">Email</p>
+                  <p className="font-medium text-gray-900">{billingDetails.customerEmail}</p>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-gray-600 text-xs">Serial Number</p>
+                  <p className="font-medium text-gray-900">{billingDetails.customerSerialNumber}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Billing Details */}
+            {billingDetails.billingDetails && (
+              <>
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                    <MapPin size={16} /> Billing Address
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-gray-600 text-xs">First Name</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.firstName}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600 text-xs">Last Name</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.lastName}</p>
+                    </div>
+                    {billingDetails.billingDetails.companyName && (
+                      <div className="col-span-2">
+                        <p className="text-gray-600 text-xs">Company</p>
+                        <p className="font-medium text-gray-900">{billingDetails.billingDetails.companyName}</p>
+                      </div>
+                    )}
+                    <div className="col-span-2">
+                      <p className="text-gray-600 text-xs">Address Line 1</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.addressLine1}</p>
+                    </div>
+                    {billingDetails.billingDetails.addressLine2 && (
+                      <div className="col-span-2">
+                        <p className="text-gray-600 text-xs">Address Line 2</p>
+                        <p className="font-medium text-gray-900">{billingDetails.billingDetails.addressLine2}</p>
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-gray-600 text-xs">City</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.city}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600 text-xs">State</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.state}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600 text-xs">Postal Code</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.postalCode}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600 text-xs">Country</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.countryCode}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                    <CreditCard size={16} /> Card Information
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-gray-600 text-xs">Cardholder Name</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.cardholderName}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600 text-xs">Card Last 4 Digits</p>
+                      <p className="font-mono font-medium text-gray-900">••••{billingDetails.billingDetails.cardLast4}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600 text-xs">Payment Gateway</p>
+                      <p className="font-medium capitalize text-gray-900">{billingDetails.billingDetails.paymentGateway}</p>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Brand Info */}
+            {billingDetails.brand && (
+              <div className="border-t pt-4">
+                <h3 className="text-sm font-semibold text-gray-700 mb-2">Brand</h3>
+                <p className="text-sm font-medium text-gray-900">{billingDetails.brand.name}</p>
+              </div>
+            )}
           </div>
         )}
       </Modal>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../api/axios';
-import { Building2, FileText, Users, DollarSign, TrendingUp, Clock } from 'lucide-react';
+import { Building2, FileText, Users, DollarSign, TrendingUp, Clock, RefreshCw } from 'lucide-react';
 
 export default function Dashboard() {
   const [stats, setStats] = useState({ brands: 0, invoices: 0, users: 0, revenue: 0, pending: 0, paid: 0 });
@@ -31,8 +31,9 @@ export default function Dashboard() {
         // Calculate total refunds and chargebacks for display
         const refunds = invoices.filter(i => i.status === 'refunded').reduce((s, i) => s + (i.refundAmount || 0), 0);
         const chargebacks = invoices.filter(i => i.status === 'chargebacked').reduce((s, i) => s + (i.chargebackAmount || 0), 0);
+        const reversed = invoices.filter(i => i.status === 'reversed').length;
 
-        setStats({ brands: brandsRes.data.length, invoices: invoices.length, users: usersCount, revenue, pending, paid, refunds, chargebacks });
+        setStats({ brands: brandsRes.data.length, invoices: invoices.length, users: usersCount, revenue, pending, paid, refunds, chargebacks, reversed });
         setRecentInvoices(invoices.slice(0, 5));
       } catch (err) {
         console.error(err);
@@ -52,6 +53,7 @@ export default function Dashboard() {
     { label: 'Chargebacks (USD)', value: `$${(stats.chargebacks || 0).toFixed(2)}`, icon: DollarSign, color: 'orange' },
     { label: 'Pending Invoices', value: stats.pending, icon: Clock, color: 'yellow' },
     { label: 'Paid Invoices', value: stats.paid, icon: TrendingUp, color: 'emerald' },
+    { label: 'Reversed Payments', value: stats.reversed || 0, icon: RefreshCw, color: 'sky' },
   ];
 
   const colorMap = {
@@ -63,10 +65,18 @@ export default function Dashboard() {
     emerald: 'bg-emerald-50 text-emerald-600',
     red: 'bg-red-50 text-red-600',
     orange: 'bg-orange-50 text-orange-600',
+    sky: 'bg-sky-50 text-sky-600',
   };
 
   const statusBadge = (status) => {
-    const map = { pending: 'bg-yellow-100 text-yellow-700', paid: 'bg-green-100 text-green-700', failed: 'bg-red-100 text-red-700' };
+    const map = { 
+      pending: 'bg-yellow-100 text-yellow-700', 
+      paid: 'bg-green-100 text-green-700', 
+      failed: 'bg-red-100 text-red-700',
+      reversed: 'bg-sky-100 text-sky-700',
+      refunded: 'bg-purple-100 text-purple-700',
+      chargebacked: 'bg-orange-100 text-orange-700'
+    };
     return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${map[status] || ''}`}>{status}</span>;
   };
 
