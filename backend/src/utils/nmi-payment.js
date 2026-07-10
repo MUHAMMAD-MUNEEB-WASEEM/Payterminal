@@ -82,7 +82,7 @@ async function processNMIPayment(credentials, paymentData) {
         zip: paymentData.postalCode || '',
         country: paymentData.countryCode || 'US',
         phone: paymentData.phone || '',
-        order_id: paymentData.description,
+        order_id: `${paymentData.description}-${Date.now()}`, // Add timestamp to prevent duplicates
         order_description: paymentData.description
       };
 
@@ -242,7 +242,7 @@ async function processNMIPayment(credentials, paymentData) {
         zip: paymentData.postalCode || '',
         country: paymentData.countryCode || 'US',
         phone: paymentData.phone || '',
-        order_id: paymentData.description,
+        order_id: `${paymentData.description}-${Date.now()}`, // Add timestamp to prevent duplicates
         order_description: paymentData.description
       };
 
