@@ -42,6 +42,7 @@ export default function PublicInvoice() {
     state: '',
     postalCode: '',
     countryCode: 'US',
+    phone: '',
   });
   const [paying, setPaying] = useState(false);
   const [collectJsReady, setCollectJsReady] = useState(false);
@@ -228,6 +229,7 @@ export default function PublicInvoice() {
           state: cardData.state,
           postalCode: cardData.postalCode,
           countryCode: cardData.countryCode,
+          phone: cardData.phone,
         };
         
         console.log('=== PAYMENT REQUEST (RAW CARD) ===');
@@ -295,6 +297,7 @@ export default function PublicInvoice() {
         state: cardData.state,
         postalCode: cardData.postalCode,
         countryCode: cardData.countryCode,
+        phone: cardData.phone,
       };
       
       console.log('=== PAYMENT REQUEST ===');
@@ -613,7 +616,7 @@ export default function PublicInvoice() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 gap-4 mb-4">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code *</label>
                         <input
@@ -639,6 +642,20 @@ export default function PublicInvoice() {
                           <option value="AU">Australia</option>
                         </select>
                       </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Phone Number {selectedMerchant?.gateway === 'beyondbancard' ? '*' : '(Optional)'}
+                      </label>
+                      <input
+                        type="tel"
+                        required={selectedMerchant?.gateway === 'beyondbancard'}
+                        value={cardData.phone}
+                        onChange={(e) => setCardData({ ...cardData, phone: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="(555) 123-4567"
+                      />
                     </div>
                   </div>
 

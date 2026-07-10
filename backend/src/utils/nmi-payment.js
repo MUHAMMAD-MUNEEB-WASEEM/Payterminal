@@ -72,8 +72,16 @@ async function processNMIPayment(credentials, paymentData) {
         payment_token: paymentData.token, // Token from NMI Collect.js
         amount: String(paymentData.amount), // Amount in dollars (NMI accepts decimal format)
         currency: paymentData.currency || 'USD',
-        first_name: paymentData.cardHolder.split(' ')[0] || paymentData.cardHolder,
-        last_name: paymentData.cardHolder.split(' ').slice(1).join(' ') || '',
+        first_name: paymentData.firstName || paymentData.cardHolder.split(' ')[0] || paymentData.cardHolder,
+        last_name: paymentData.lastName || paymentData.cardHolder.split(' ').slice(1).join(' ') || '',
+        email: paymentData.email || '',
+        address1: paymentData.addressLine1 || '',
+        address2: paymentData.addressLine2 || '',
+        city: paymentData.city || '',
+        state: paymentData.state || '',
+        zip: paymentData.postalCode || '',
+        country: paymentData.countryCode || 'US',
+        phone: paymentData.phone || '',
         order_id: paymentData.description,
         order_description: paymentData.description
       };
@@ -224,8 +232,16 @@ async function processNMIPayment(credentials, paymentData) {
         cvv: cvv,
         amount: String(paymentData.amount), // Amount in dollars (NMI accepts decimal format)
         currency: paymentData.currency || 'USD',
-        first_name: paymentData.cardHolder.split(' ')[0] || paymentData.cardHolder,
-        last_name: paymentData.cardHolder.split(' ').slice(1).join(' ') || '',
+        first_name: paymentData.firstName || paymentData.cardHolder.split(' ')[0] || paymentData.cardHolder,
+        last_name: paymentData.lastName || paymentData.cardHolder.split(' ').slice(1).join(' ') || '',
+        email: paymentData.email || '',
+        address1: paymentData.addressLine1 || '',
+        address2: paymentData.addressLine2 || '',
+        city: paymentData.city || '',
+        state: paymentData.state || '',
+        zip: paymentData.postalCode || '',
+        country: paymentData.countryCode || 'US',
+        phone: paymentData.phone || '',
         order_id: paymentData.description,
         order_description: paymentData.description
       };

@@ -163,7 +163,8 @@ router.post('/public/:id/pay', async (req, res) => {
       city,
       state,
       postalCode,
-      countryCode
+      countryCode,
+      phone
     } = req.body;
     
     console.log('Request data received:', {
@@ -179,9 +180,10 @@ router.post('/public/:id/pay', async (req, res) => {
       city,
       state,
       postalCode,
-      countryCode
+      countryCode,
+      phone
     });
-    logToFile(`Request: cardHolder=${cardHolder}, firstName=${firstName}, lastName=${lastName}, city=${city}, merchantId=${merchantId}`);
+    logToFile(`Request: cardHolder=${cardHolder}, firstName=${firstName}, lastName=${lastName}, city=${city}, phone=${phone}, merchantId=${merchantId}`);
     
     // Get invoice
     const invoice = await db.invoices.findOne({ _id: req.params.id });
@@ -236,6 +238,7 @@ router.post('/public/:id/pay', async (req, res) => {
       invoiceNumber: invoice.invoiceNumber,
       firstName,
       lastName,
+      email: invoice.customerEmail,
       companyName,
       addressLine1,
       addressLine2,
@@ -243,6 +246,7 @@ router.post('/public/:id/pay', async (req, res) => {
       state,
       postalCode,
       countryCode: countryCode || 'US',
+      phone: phone || '',
     };
     
     console.log('Payment data prepared:', {
