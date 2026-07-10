@@ -83,7 +83,8 @@ async function processNMIPayment(credentials, paymentData) {
         country: paymentData.countryCode || 'US',
         phone: paymentData.phone || '',
         order_id: `${paymentData.description}-${Date.now()}`, // Add timestamp to prevent duplicates
-        order_description: paymentData.description
+        order_description: paymentData.description,
+        dup_seconds: '0' // Allow duplicate transactions (disable duplicate checking)
       };
 
       console.log('\n📤 SENDING TOKENIZED REQUEST TO NMI');
@@ -243,7 +244,8 @@ async function processNMIPayment(credentials, paymentData) {
         country: paymentData.countryCode || 'US',
         phone: paymentData.phone || '',
         order_id: `${paymentData.description}-${Date.now()}`, // Add timestamp to prevent duplicates
-        order_description: paymentData.description
+        order_description: paymentData.description,
+        dup_seconds: '0' // Allow duplicate transactions (disable duplicate checking)
       };
 
       console.log('\n📤 SENDING RAW CARD REQUEST TO NMI');
