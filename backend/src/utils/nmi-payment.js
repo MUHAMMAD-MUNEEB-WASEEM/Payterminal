@@ -66,6 +66,9 @@ async function processNMIPayment(credentials, paymentData) {
       logToFile('🔷 Processing tokenized payment with NMI token');
       
       // Build NMI payment request using token
+      // Generate unique order_id with random component to avoid duplicate detection
+      const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
       const paymentRequest = {
         security_key: credentials.security_key,
         type: 'sale',
@@ -82,9 +85,8 @@ async function processNMIPayment(credentials, paymentData) {
         zip: paymentData.postalCode || '',
         country: paymentData.countryCode || 'US',
         phone: paymentData.phone || '',
-        order_id: `${paymentData.description}-${Date.now()}`, // Add timestamp to prevent duplicates
-        order_description: paymentData.description,
-        dup_seconds: '0' // Allow duplicate transactions (disable duplicate checking)
+        order_id: `${paymentData.invoiceNumber}-${uniqueId}`, // Unique ID per attempt
+        order_description: paymentData.description
       };
 
       console.log('\n📤 SENDING TOKENIZED REQUEST TO NMI');
@@ -225,6 +227,9 @@ async function processNMIPayment(credentials, paymentData) {
       const expiryYear = String(paymentData.expiryYear);
       
       // Build NMI payment request with raw card
+      // Generate unique order_id with random component to avoid duplicate detection
+      const uniqueId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
       const paymentRequest = {
         security_key: credentials.security_key,
         type: 'sale',
@@ -243,9 +248,8 @@ async function processNMIPayment(credentials, paymentData) {
         zip: paymentData.postalCode || '',
         country: paymentData.countryCode || 'US',
         phone: paymentData.phone || '',
-        order_id: `${paymentData.description}-${Date.now()}`, // Add timestamp to prevent duplicates
-        order_description: paymentData.description,
-        dup_seconds: '0' // Allow duplicate transactions (disable duplicate checking)
+        order_id: `${paymentData.invoiceNumber}-${uniqueId}`, // Unique ID per attempt
+        order_description: paymentData.description
       };
 
       console.log('\n📤 SENDING RAW CARD REQUEST TO NMI');
