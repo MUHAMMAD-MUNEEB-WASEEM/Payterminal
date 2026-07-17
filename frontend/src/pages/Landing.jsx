@@ -46,7 +46,7 @@ export default function Landing() {
             Professional Invoice & Payment System
           </h2>
           <p className="text-xl text-gray-600 mb-8">
-            Create, manage, and process invoices with secure payment processing. Built for for small and startup businesses.
+            Create, manage, and process invoices with secure payment processing. Built for small and startup businesses.
           </p>
           <div className="flex gap-4 justify-center">
             <Link
