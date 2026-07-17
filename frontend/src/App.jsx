@@ -13,10 +13,11 @@ import Merchants from './pages/Merchants';
 import PublicInvoice from './pages/PublicInvoice';
 import PaymentSuccess from './pages/PaymentSuccess';
 
-function PrivateRoute({ children, adminOnly = false }) {
+function PrivateRoute({ children, adminOnly = false, adminOrCompliance = false }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
   if (adminOnly && user.role !== 'admin') return <Navigate to="/dashboard" replace />;
+  if (adminOrCompliance && user.role !== 'admin' && user.role !== 'compliance') return <Navigate to="/dashboard" replace />;
   return <Layout>{children}</Layout>;
 }
 
@@ -39,10 +40,12 @@ function AppRoutes() {
       <Route path="/dashboard" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
       <Route path="/invoices" element={<PrivateRoute><Invoices /></PrivateRoute>} />
       
+      {/* Admin or Compliance routes */}
+      <Route path="/brands" element={<PrivateRoute adminOrCompliance><Brands /></PrivateRoute>} />
+      <Route path="/merchants" element={<PrivateRoute adminOrCompliance><Merchants /></PrivateRoute>} />
+      
       {/* Admin-only routes */}
-      <Route path="/brands" element={<PrivateRoute adminOnly><Brands /></PrivateRoute>} />
       <Route path="/users" element={<PrivateRoute adminOnly><Users /></PrivateRoute>} />
-      <Route path="/merchants" element={<PrivateRoute adminOnly><Merchants /></PrivateRoute>} />
       
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

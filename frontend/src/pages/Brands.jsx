@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
 import api from '../api/axios';
 import Modal from '../components/Modal';
+import VerificationModal from '../components/VerificationModal';
 import toast from 'react-hot-toast';
 import { Plus, Pencil, Trash2, Building2, CreditCard } from 'lucide-react';
 import { getImageUrl } from '../utils/api';
+import { useAuth } from '../context/AuthContext';
 
 const EMPTY_FORM = { name: '', brandNo: '', logo: null, redirectUrl: '', enableRedirect: false };
 
 export default function Brands() {
+  const { user } = useAuth();
   const [brands, setBrands] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -21,6 +24,14 @@ export default function Brands() {
   const [selectedBrand, setSelectedBrand] = useState(null);
   const [allMerchants, setAllMerchants] = useState([]);
   const [brandMerchants, setBrandMerchants] = useState([]);
+  const [verificationModal, setVerificationModal] = useState({ 
+    open: false, 
+    action: '', 
+    pendingData: null, 
+    brandId: null, 
+    brandName: null,
+    merchantId: null 
+  });
 
   const fetchBrands = async () => {
     try {
@@ -73,9 +84,30 @@ export default function Brands() {
     }
   };
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e, verificationCode = null) => {
     e.preventDefault();
     if (!editing && !form.logo) return toast.error('Brand logo is required');
+
+    // If compliance user and no verification code, request verification
+    if (user?.role === 'compliance' && !verificationCode) {
+      const data = new FormData();
+      data.append('name', form.name);
+      data.append('brandNo', form.brandNo);
+      data.append('redirectUrl', form.redirectUrl);
+      data.append('enableRedirect', form.enableRedirect);
+      if (form.logo) data.append('logo', form.logo);
+      
+      const action = editing ? 'edit_brand' : 'create_brand';
+      setVerificationModal({ 
+        open: true, 
+        action, 
+        pendingData: data,
+        brandId: editing?._id,
+        brandName: form.name
+      });
+      return;
+    }
+
     setSaving(true);
     try {
       const data = new FormData();
@@ -84,6 +116,10 @@ export default function Brands() {
       data.append('redirectUrl', form.redirectUrl);
       data.append('enableRedirect', form.enableRedirect);
       if (form.logo) data.append('logo', form.logo);
+      
+      if (verificationCode) {
+        data.append('verificationCode', verificationCode);
+      }
 
       if (editing) {
         await api.put(`/brands/${editing._id}`, data);
@@ -101,8 +137,78 @@ export default function Brands() {
     }
   };
 
+  const handleVerificationComplete = async (code) => {
+    const { action, pendingData, merchantId, brandId } = verificationModal;
+    
+    if (action === 'create_brand') {
+      pendingData.append('verificationCode', code);
+      setSaving(true);
+      try {
+        await api.post('/brands', pendingData);
+        toast.success('Brand created');
+        setShowModal(false);
+        fetchBrands();
+      } catch (err) {
+        toast.error(err.response?.data?.message || 'Failed to create brand');
+      } finally {
+        setSaving(false);
+      }
+    } else if (action === 'edit_brand') {
+      pendingData.append('verificationCode', code);
+      setSaving(true);
+      try {
+        await api.put(`/brands/${brandId}`, pendingData);
+        toast.success('Brand updated');
+        setShowModal(false);
+        fetchBrands();
+      } catch (err) {
+        toast.error(err.response?.data?.message || 'Failed to update brand');
+      } finally {
+        setSaving(false);
+      }
+    } else if (action === 'delete_brand') {
+      try {
+        await api.delete(`/brands/${brandId}?verificationCode=${encodeURIComponent(code)}`);
+        toast.success('Brand deleted');
+        fetchBrands();
+      } catch (err) {
+        toast.error(err.response?.data?.message || 'Failed to delete brand');
+      }
+    } else if (action === 'assign_merchant_to_brand') {
+      await assignMerchantWithCode(merchantId, code);
+    }
+  };
+
+  const assignMerchantWithCode = async (merchantId, verificationCode) => {
+    try {
+      await api.post(`/merchants/brand/${selectedBrand._id}`, { merchantId, verificationCode });
+      toast.success('Merchant assigned to brand');
+      openMerchantModal(selectedBrand);
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to assign merchant');
+    }
+  };
+
   const handleDelete = async (id) => {
-    if (!confirm('Delete this brand?')) return;
+    const brand = brands.find(b => b._id === id);
+    console.log('🗑️ Delete clicked for brand:', { id, brand });
+    
+    // If compliance user, request verification (no confirm dialog - modal handles it)
+    if (user?.role === 'compliance') {
+      const modalState = { 
+        open: true, 
+        action: 'delete_brand', 
+        brandId: id,
+        brandName: brand?.name
+      };
+      console.log('🔐 Opening verification modal with:', modalState);
+      setVerificationModal(modalState);
+      return;
+    }
+
+    // Admin gets confirmation dialog
+    if (!confirm(`Delete brand "${brand?.name}"?`)) return;
+
     try {
       await api.delete(`/brands/${id}`);
       toast.success('Brand deleted');
@@ -128,6 +234,12 @@ export default function Brands() {
   };
 
   const assignMerchant = async (merchantId) => {
+    // If compliance user, request verification
+    if (user?.role === 'compliance') {
+      setVerificationModal({ open: true, action: 'assign_merchant_to_brand', merchantId });
+      return;
+    }
+
     try {
       await api.post(`/merchants/brand/${selectedBrand._id}/assign`, { merchantId });
       toast.success('Merchant assigned to brand');
@@ -190,12 +302,14 @@ export default function Brands() {
                   <button onClick={() => openMerchantModal(brand)} className="p-1.5 rounded-lg hover:bg-purple-50 text-purple-600 transition-colors" title="Manage Merchants">
                     <CreditCard size={15} />
                   </button>
-                  <button onClick={() => openEdit(brand)} className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-600 transition-colors">
+                  <button onClick={() => openEdit(brand)} className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-600 transition-colors" title="Edit Brand">
                     <Pencil size={15} />
                   </button>
-                  <button onClick={() => handleDelete(brand._id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors">
-                    <Trash2 size={15} />
-                  </button>
+                  {(user?.role === 'admin' || user?.role === 'compliance') && (
+                    <button onClick={() => handleDelete(brand._id)} className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors" title="Delete Brand">
+                      <Trash2 size={15} />
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -365,6 +479,23 @@ export default function Brands() {
             </div>
         </div>
       </Modal>
+
+      {/* Verification Modal */}
+      <VerificationModal
+        isOpen={verificationModal.open}
+        onClose={() => setVerificationModal({ open: false, action: '', pendingData: null, brandId: null, brandName: null, merchantId: null })}
+        onVerified={handleVerificationComplete}
+        action={verificationModal.action}
+        targetId={verificationModal.brandId}
+        targetName={verificationModal.brandName}
+        actionLabel={
+          verificationModal.action === 'create_brand' ? 'Create Brand' :
+          verificationModal.action === 'edit_brand' ? 'Update Brand' :
+          verificationModal.action === 'delete_brand' ? 'Delete Brand' :
+          verificationModal.action === 'assign_merchant_to_brand' ? 'Assign Merchant' : 'Verify'
+        }
+        skipVerify={true}
+      />
     </div>
   );
 }

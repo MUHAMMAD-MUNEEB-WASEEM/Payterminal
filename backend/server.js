@@ -35,7 +35,8 @@ app.get('/', (req, res) => {
       invoices: '/api/invoices',
       merchants: '/api/merchants',
       userBrands: '/api/user-brands',
-      notifications: '/api/notifications'
+      notifications: '/api/notifications',
+      verification: '/api/verification'
     }
   });
 });
@@ -47,6 +48,7 @@ app.use('/api/invoices', require('./src/routes/invoices'));
 app.use('/api/merchants', require('./src/routes/merchants'));
 app.use('/api/user-brands', require('./src/routes/userBrands'));
 app.use('/api/notifications', require('./src/routes/notifications'));
+app.use('/api/verification', require('./src/routes/verification'));
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
 async function start() {

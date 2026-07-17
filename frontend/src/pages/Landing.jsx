@@ -12,7 +12,7 @@ export default function Landing() {
               <span className="text-white font-bold text-xl">US</span>
             </div>
             <div>
-              <h1 className="text-xl font-bold text-gray-900">USPTO</h1>
+              <h1 className="text-xl font-bold text-gray-900">Invoicing</h1>
               <p className="text-xs text-gray-500">Payment Terminal</p>
             </div>
           </div>
@@ -46,7 +46,7 @@ export default function Landing() {
             Professional Invoice & Payment System
           </h2>
           <p className="text-xl text-gray-600 mb-8">
-            Create, manage, and process invoices with secure payment processing. Built for USPTO trademark and patent services.
+            Create, manage, and process invoices with secure payment processing. Built for for small and startup businesses.
           </p>
           <div className="flex gap-4 justify-center">
             <Link
@@ -125,7 +125,7 @@ export default function Landing() {
       <section className="max-w-7xl mx-auto px-4 py-20">
         <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl p-12 text-center text-white">
           <h2 className="text-3xl font-bold mb-4">Ready to streamline your invoicing?</h2>
-          <p className="text-xl text-blue-100 mb-8">Join hundreds of businesses using USPTO Payment Terminal</p>
+          <p className="text-xl text-blue-100 mb-8">Join hundreds of businesses using Invoicing Payment Terminal</p>
           <Link
             to="/signup"
             className="inline-block px-8 py-4 bg-white hover:bg-gray-100 rounded-lg text-lg font-semibold text-blue-600 transition-colors"
@@ -138,7 +138,7 @@ export default function Landing() {
       {/* Footer */}
       <footer className="bg-gray-900 text-gray-400 py-8">
         <div className="max-w-7xl mx-auto px-4 text-center">
-          <p className="text-sm">© 2026 USPTO Payment Terminal. All rights reserved.</p>
+          <p className="text-sm">© 2026 Invoicing Payment Terminal. All rights reserved.</p>
           <p className="text-xs mt-2">Secure payment processing powered by N-Genius</p>
         </div>
       </footer>

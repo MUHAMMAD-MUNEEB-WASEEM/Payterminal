@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { auth, adminOnly } = require('../middleware/auth');
+const { auth, adminOnly, adminOrCompliance } = require('../middleware/auth');
 const { generateInvoiceNumber } = require('../utils/invoiceNumber');
 const { createPaymentOrder, getOrderStatus } = require('../utils/ngenius');
 
@@ -12,13 +12,77 @@ async function withBrand(invoice) {
   return { ...invoice, brand: brand || null };
 }
 
-// Get all invoices (filtered by user for non-admins)
+// Get all invoices (filtered by user for non-admins, show all for compliance)
 router.get('/', auth, async (req, res) => {
   try {
-    const query = req.user.role === 'admin' ? {} : { createdBy: req.user._id };
+    // Admin and compliance can see all invoices
+    const query = (req.user.role === 'admin' || req.user.role === 'compliance') 
+      ? {} 
+      : { createdBy: req.user._id };
     const invoices = await db.invoices.find(query, { createdAt: -1 });
     const populated = await Promise.all(invoices.map(withBrand));
     res.json(populated);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Database Query Search - Returns specific fields only (admin/compliance only)
+router.get('/db-search', auth, adminOrCompliance, async (req, res) => {
+  try {
+    const { q } = req.query;
+    
+    if (!q || q.trim() === '') {
+      return res.json([]);
+    }
+    
+    const searchTerm = q.toLowerCase();
+    
+    // Search across multiple fields
+    const allInvoices = await db.invoices.find({});
+    
+    const matches = allInvoices.filter(inv => {
+      return (
+        (inv.invoiceNumber?.toLowerCase() || '').includes(searchTerm) ||
+        (inv.customerName?.toLowerCase() || '').includes(searchTerm) ||
+        (inv.customerEmail?.toLowerCase() || '').includes(searchTerm) ||
+        (inv.customerSerialNumber?.toLowerCase() || '').includes(searchTerm) ||
+        (inv.paymentOrderRef?.toLowerCase() || '').includes(searchTerm) ||
+        (inv.billingDetails?.clientIp?.toLowerCase() || '').includes(searchTerm) ||
+        (inv.billingDetails?.deviceFingerprint?.toLowerCase() || '').includes(searchTerm) ||
+        (inv.billingDetails?.userAgent?.toLowerCase() || '').includes(searchTerm)
+      );
+    });
+    
+    // Return ONLY specific fields (no merchant name, no brand name)
+    const results = matches.map(inv => ({
+      _id: inv._id,
+      invoiceNumber: inv.invoiceNumber,
+      transactionId: inv.paymentOrderRef || null,
+      email: inv.customerEmail,
+      customerName: inv.customerName,
+      customerSerialNumber: inv.customerSerialNumber,
+      ipAddress: inv.billingDetails?.clientIp || null,
+      deviceFingerprint: inv.billingDetails?.deviceFingerprint || null,
+      userAgent: inv.billingDetails?.userAgent || null,
+      paymentTimestamp: inv.billingDetails?.paymentTimestamp || null,
+      createdAt: inv.createdAt,
+      status: inv.status,
+      total: inv.total,
+      // Billing details
+      cardLast4: inv.billingDetails?.cardLast4 || null,
+      cardExpiry: inv.billingDetails?.cardExpiry || null,
+      paymentGateway: inv.billingDetails?.paymentGateway || null,
+      phone: inv.billingDetails?.phone || null,
+      // Address
+      addressLine1: inv.billingDetails?.addressLine1 || null,
+      city: inv.billingDetails?.city || null,
+      state: inv.billingDetails?.state || null,
+      postalCode: inv.billingDetails?.postalCode || null,
+      countryCode: inv.billingDetails?.countryCode || null
+    }));
+    
+    res.json(results);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -340,6 +404,11 @@ router.post('/public/:id/pay', async (req, res) => {
         console.log('Notification created for limit reached');
       }
       
+      // Capture client metadata
+      const clientIp = req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.connection.remoteAddress || req.socket.remoteAddress || 'Unknown';
+      const userAgent = req.headers['user-agent'] || 'Unknown';
+      const paymentTimestamp = new Date().toISOString();
+      
       // Update invoice status
       await db.invoices.update(
         { _id: invoice._id },
@@ -358,9 +427,16 @@ router.post('/public/:id/pay', async (req, res) => {
               state,
               postalCode,
               countryCode,
+              phone,
               cardholderName: cardHolder,
               cardLast4: cardNumber ? cardNumber.slice(-4) : null,
-              paymentGateway: merchant.gateway
+              cardExpiry: expiryMonth && expiryYear ? `${expiryMonth}/${expiryYear}` : null,
+              paymentGateway: merchant.gateway,
+              // Payment metadata
+              paymentTimestamp,
+              clientIp,
+              userAgent,
+              deviceFingerprint: userAgent // Simple fingerprint using user agent
             },
             updatedAt: new Date().toISOString()
           } 
@@ -471,7 +547,7 @@ router.get('/:id/status', auth, async (req, res) => {
   }
 });
 
-router.get('/:id/billing', auth, adminOnly, async (req, res) => {
+router.get('/:id/billing', auth, adminOrCompliance, async (req, res) => {
   try {
     console.log('📋 BILLING DETAILS REQUEST:', req.params.id);
     const invoice = await db.invoices.findOne({ _id: req.params.id });
@@ -484,10 +560,23 @@ router.get('/:id/billing', auth, adminOnly, async (req, res) => {
     console.log('✅ Invoice found:', {
       invoiceNumber: invoice.invoiceNumber,
       status: invoice.status,
-      hasBillingDetails: !!invoice.billingDetails
+      hasBillingDetails: !!invoice.billingDetails,
+      selectedMerchantId: invoice.selectedMerchantId
     });
     
-    // Return invoice with billing details
+    // Get merchant information if available
+    let merchant = null;
+    if (invoice.selectedMerchantId) {
+      merchant = await db.merchants.findOne({ _id: invoice.selectedMerchantId });
+      if (merchant) {
+        merchant = {
+          nickname: merchant.nickname,
+          gateway: merchant.gateway
+        };
+      }
+    }
+    
+    // Return invoice with billing details and merchant info
     const result = await withBrand(invoice);
     const response = {
       invoiceId: invoice._id,
@@ -499,7 +588,8 @@ router.get('/:id/billing', auth, adminOnly, async (req, res) => {
       status: invoice.status,
       billingDetails: invoice.billingDetails || null,
       paymentDate: invoice.updatedAt,
-      brand: result.brand
+      brand: result.brand,
+      merchant: merchant
     };
     
     console.log('📤 Sending response:', JSON.stringify(response, null, 2));
@@ -624,10 +714,10 @@ router.patch('/:id/status', auth, adminOnly, async (req, res) => {
   }
 });
 
-// Admin: Mark invoice as refunded
-router.patch('/:id/refund', auth, adminOnly, async (req, res) => {
+// Admin or Compliance: Mark invoice as refunded
+router.patch('/:id/refund', auth, adminOrCompliance, async (req, res) => {
   try {
-    const { refundAmount } = req.body;
+    const { refundAmount, verificationCode } = req.body;
     if (refundAmount === undefined || refundAmount === null) {
       return res.status(400).json({ message: 'Refund amount is required' });
     }
@@ -641,6 +731,36 @@ router.patch('/:id/refund', auth, adminOnly, async (req, res) => {
     // Validate refund amount doesn't exceed total
     if (refundAmount > invoice.total) {
       return res.status(400).json({ message: 'Refund amount cannot exceed invoice total' });
+    }
+    
+    // Compliance users need verification code
+    if (req.user.role === 'compliance') {
+      if (!verificationCode) {
+        return res.status(400).json({ message: 'Verification code is required' });
+      }
+      
+      // Verify the code
+      const verification = await db.verificationCodes.findOne({
+        code: verificationCode,
+        userId: req.user._id,
+        action: 'update_refund',
+        targetId: req.params.id,
+        used: false,
+      });
+      
+      if (!verification) {
+        return res.status(400).json({ message: 'Invalid or already used verification code' });
+      }
+      
+      if (new Date(verification.expiresAt) < new Date()) {
+        return res.status(400).json({ message: 'Verification code has expired' });
+      }
+      
+      // Mark verification as used
+      await db.verificationCodes.update(
+        { _id: verification._id },
+        { $set: { used: true, usedAt: new Date().toISOString() } }
+      );
     }
     
     await db.invoices.update(
@@ -738,10 +858,10 @@ router.patch('/:id/undo', auth, adminOnly, async (req, res) => {
   }
 });
 
-// Admin: Mark invoice as chargebacked
-router.patch('/:id/chargeback', auth, adminOnly, async (req, res) => {
+// Admin or Compliance: Mark invoice as chargebacked
+router.patch('/:id/chargeback', auth, adminOrCompliance, async (req, res) => {
   try {
-    const { chargebackAmount } = req.body;
+    const { chargebackAmount, verificationCode } = req.body;
     if (chargebackAmount === undefined || chargebackAmount === null) {
       return res.status(400).json({ message: 'Chargeback amount is required' });
     }
@@ -755,6 +875,36 @@ router.patch('/:id/chargeback', auth, adminOnly, async (req, res) => {
     // Validate chargeback amount doesn't exceed total
     if (chargebackAmount > invoice.total) {
       return res.status(400).json({ message: 'Chargeback amount cannot exceed invoice total' });
+    }
+    
+    // Compliance users need verification code
+    if (req.user.role === 'compliance') {
+      if (!verificationCode) {
+        return res.status(400).json({ message: 'Verification code is required' });
+      }
+      
+      // Verify the code
+      const verification = await db.verificationCodes.findOne({
+        code: verificationCode,
+        userId: req.user._id,
+        action: 'update_chargeback',
+        targetId: req.params.id,
+        used: false,
+      });
+      
+      if (!verification) {
+        return res.status(400).json({ message: 'Invalid or already used verification code' });
+      }
+      
+      if (new Date(verification.expiresAt) < new Date()) {
+        return res.status(400).json({ message: 'Verification code has expired' });
+      }
+      
+      // Mark verification as used
+      await db.verificationCodes.update(
+        { _id: verification._id },
+        { $set: { used: true, usedAt: new Date().toISOString() } }
+      );
     }
     
     await db.invoices.update(
@@ -773,6 +923,56 @@ router.delete('/:id', auth, adminOnly, async (req, res) => {
   try {
     await db.invoices.remove({ _id: req.params.id });
     res.json({ message: 'Invoice deleted' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Archive invoice (admin or compliance)
+router.patch('/:id/archive', auth, adminOrCompliance, async (req, res) => {
+  try {
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
+
+    await db.invoices.update(
+      { _id: req.params.id },
+      { 
+        $set: { 
+          archived: true,
+          archivedAt: new Date().toISOString(),
+          archivedBy: req.user._id,
+          updatedAt: new Date().toISOString()
+        } 
+      }
+    );
+
+    const updatedInvoice = await db.invoices.findOne({ _id: req.params.id });
+    res.json(await withBrand(updatedInvoice));
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Unarchive invoice (admin or compliance)
+router.patch('/:id/unarchive', auth, adminOrCompliance, async (req, res) => {
+  try {
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
+
+    await db.invoices.update(
+      { _id: req.params.id },
+      { 
+        $set: { 
+          archived: false,
+          archivedAt: null,
+          archivedBy: null,
+          updatedAt: new Date().toISOString()
+        } 
+      }
+    );
+
+    const updatedInvoice = await db.invoices.findOne({ _id: req.params.id });
+    res.json(await withBrand(updatedInvoice));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

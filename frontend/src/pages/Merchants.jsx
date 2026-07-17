@@ -2,10 +2,13 @@ import { useState, useEffect } from 'react';
 import axios from '../api/axios';
 import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
-import { Plus, Edit2, Trash2, Power, PowerOff, Building2 } from 'lucide-react';
+import VerificationModal from '../components/VerificationModal';
+import { Plus, Edit2, Trash2, Power, PowerOff, Building2, RefreshCw, Gauge } from 'lucide-react';
 import { getImageUrl } from '../utils/api';
+import { useAuth } from '../context/AuthContext';
 
 export default function Merchants() {
+  const { user } = useAuth();
   const [merchants, setMerchants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -23,6 +26,8 @@ export default function Merchants() {
   const [selectedMerchant, setSelectedMerchant] = useState(null);
   const [allBrands, setAllBrands] = useState([]);
   const [merchantBrands, setMerchantBrands] = useState([]);
+  const [verificationModal, setVerificationModal] = useState({ open: false, action: '', merchantId: null });
+  const [enableCredentialEdit, setEnableCredentialEdit] = useState(false);
 
   useEffect(() => {
     fetchMerchants();
@@ -78,6 +83,7 @@ export default function Merchants() {
       amountLimit: merchant.amountLimit || '',
       ticketSize: merchant.ticketSize || ''
     });
+    setEnableCredentialEdit(false); // Reset toggle to disabled when opening edit modal
     setShowModal(true);
   };
 
@@ -92,15 +98,80 @@ export default function Merchants() {
     }
   };
 
-  const toggleActive = async (merchant) => {
+  const toggleActive = async (merchant, verificationCode = null) => {
     try {
-      await axios.patch(`/merchants/${merchant._id}`, {
-        isActive: !merchant.isActive
-      });
+      const payload = { isActive: !merchant.isActive };
+      if (verificationCode) {
+        payload.verificationCode = verificationCode;
+      }
+      await axios.post(`/merchants/${merchant._id}/toggle-active`, payload);
       toast.success(`Merchant ${!merchant.isActive ? 'activated' : 'deactivated'}`);
       fetchMerchants();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to update merchant');
+    }
+  };
+
+  const resetVolume = async (merchantId, verificationCode = null) => {
+    try {
+      const payload = verificationCode ? { verificationCode } : {};
+      await axios.post(`/merchants/${merchantId}/reset-volume`, payload);
+      toast.success('Merchant volume reset successfully');
+      fetchMerchants();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to reset volume');
+    }
+  };
+
+  const resetTicketSize = async (merchantId, verificationCode = null) => {
+    try {
+      const payload = verificationCode ? { verificationCode } : {};
+      await axios.post(`/merchants/${merchantId}/reset-ticket-size`, payload);
+      toast.success('Ticket size reset successfully');
+      fetchMerchants();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to reset ticket size');
+    }
+  };
+
+  const requestToggleActive = (merchant) => {
+    console.log('🔘 Toggle requested for merchant:', merchant._id, 'User role:', user?.role);
+    if (user?.role === 'compliance') {
+      console.log('🔐 Opening verification modal for toggle');
+      setVerificationModal({ open: true, action: 'toggle_merchant', merchantId: merchant._id, merchant });
+    } else {
+      toggleActive(merchant);
+    }
+  };
+
+  const requestResetVolume = (merchant) => {
+    console.log('📊 Reset volume requested for:', merchant._id, 'User role:', user?.role);
+    if (user?.role === 'compliance') {
+      console.log('🔐 Opening verification modal for reset volume');
+      setVerificationModal({ open: true, action: 'reset_volume', merchantId: merchant._id, merchant });
+    } else {
+      resetVolume(merchant._id);
+    }
+  };
+
+  const requestResetTicketSize = (merchant) => {
+    console.log('📏 Reset ticket size requested for:', merchant._id, 'User role:', user?.role);
+    if (user?.role === 'compliance') {
+      console.log('🔐 Opening verification modal for reset ticket size');
+      setVerificationModal({ open: true, action: 'reset_ticket_size', merchantId: merchant._id, merchant });
+    } else {
+      resetTicketSize(merchant._id);
+    }
+  };
+
+  const handleVerificationComplete = (code) => {
+    const { action, merchantId, merchant } = verificationModal;
+    if (action === 'toggle_merchant') {
+      toggleActive(merchant, code);
+    } else if (action === 'reset_volume') {
+      resetVolume(merchantId, code);
+    } else if (action === 'reset_ticket_size') {
+      resetTicketSize(merchantId, code);
     }
   };
 
@@ -228,7 +299,7 @@ export default function Merchants() {
               </div>
               <div className="flex gap-2">
                 <button
-                  onClick={() => toggleActive(merchant)}
+                  onClick={() => requestToggleActive(merchant)}
                   className={`p-2 rounded ${merchant.isActive ? 'text-green-600 hover:bg-green-50' : 'text-gray-400 hover:bg-gray-50'}`}
                   title={merchant.isActive ? 'Active' : 'Inactive'}
                 >
@@ -277,11 +348,35 @@ export default function Merchants() {
                       ${(merchant.amountLimit - (merchant.processedAmount || 0)).toFixed(2)} remaining
                     </p>
                   )}
-                  {(merchant.processedAmount || 0) > 0 && (
+                  {(merchant.processedAmount || 0) > 0 && (user?.role === 'admin' || user?.role === 'compliance') && (
                     <button
-                      onClick={() => resetProcessedAmount(merchant._id)}
-                      className="text-xs text-blue-600 hover:text-blue-700"
+                      onClick={() => requestResetVolume(merchant)}
+                      className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                      title="Reset Volume"
                     >
+                      <RefreshCw size={12} />
+                      Reset Volume
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Ticket Size Display */}
+            {merchant.ticketSize && merchant.ticketSize > 0 && (
+              <div className="mb-4 p-3 bg-blue-50 rounded border border-blue-200">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs text-gray-600 mb-1">Max Ticket Size</p>
+                    <p className="text-sm font-semibold text-gray-900">${merchant.ticketSize.toFixed(2)}</p>
+                  </div>
+                  {(user?.role === 'admin' || user?.role === 'compliance') && (
+                    <button
+                      onClick={() => requestResetTicketSize(merchant)}
+                      className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                      title="Reset Ticket Size"
+                    >
+                      <Gauge size={12} />
                       Reset
                     </button>
                   )}
@@ -305,13 +400,15 @@ export default function Merchants() {
                 <Edit2 size={16} />
                 Edit
               </button>
-              <button
-                onClick={() => handleDelete(merchant._id)}
-                className="flex-1 bg-red-50 text-red-600 px-3 py-2 rounded hover:bg-red-100 flex items-center justify-center gap-2"
-              >
-                <Trash2 size={16} />
-                Delete
-              </button>
+              {user?.role === 'admin' && (
+                <button
+                  onClick={() => handleDelete(merchant._id)}
+                  className="flex-1 bg-red-50 text-red-600 px-3 py-2 rounded hover:bg-red-100 flex items-center justify-center gap-2"
+                >
+                  <Trash2 size={16} />
+                  Delete
+                </button>
+              )}
             </div>
           </div>
         ))}
@@ -390,6 +487,27 @@ export default function Merchants() {
             <p className="text-xs text-gray-500 mt-1">Maximum amount for a single invoice. Invoices greater than or equal to this amount cannot be created. Leave empty for no limit.</p>
           </div>
 
+          {/* Toggle for editing credentials (only show when editing existing merchant) */}
+          {editingMerchant && (
+            <div className="border-t border-b border-gray-200 py-4">
+              <label className="flex items-center justify-between cursor-pointer">
+                <div>
+                  <span className="text-sm font-medium text-gray-700">Enable Credential Editing</span>
+                  <p className="text-xs text-gray-500 mt-1">Toggle on to modify API keys and credentials</p>
+                </div>
+                <div className="relative">
+                  <input
+                    type="checkbox"
+                    checked={enableCredentialEdit}
+                    onChange={(e) => setEnableCredentialEdit(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </div>
+              </label>
+            </div>
+          )}
+
           {formData.gateway === 'stripe' && (
             <>
               <div>
@@ -398,7 +516,8 @@ export default function Merchants() {
                   type="password"
                   value={formData.credentials.secretKey || ''}
                   onChange={(e) => handleCredentialChange('secretKey', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                   placeholder="sk_test_..."
                 />
               </div>
@@ -408,7 +527,8 @@ export default function Merchants() {
                   type="text"
                   value={formData.credentials.publishableKey || ''}
                   onChange={(e) => handleCredentialChange('publishableKey', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                   placeholder="pk_test_..."
                 />
               </div>
@@ -423,7 +543,8 @@ export default function Merchants() {
                   type="text"
                   value={formData.credentials.clientId || ''}
                   onChange={(e) => handleCredentialChange('clientId', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                   placeholder="PayPal Client ID"
                 />
               </div>
@@ -433,7 +554,8 @@ export default function Merchants() {
                   type="password"
                   value={formData.credentials.clientSecret || ''}
                   onChange={(e) => handleCredentialChange('clientSecret', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                   placeholder="PayPal Client Secret"
                 />
               </div>
@@ -442,7 +564,8 @@ export default function Merchants() {
                 <select
                   value={formData.credentials.mode || 'sandbox'}
                   onChange={(e) => handleCredentialChange('mode', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                 >
                   <option value="sandbox">Sandbox</option>
                   <option value="live">Live</option>
@@ -459,7 +582,8 @@ export default function Merchants() {
                   type="text"
                   value={formData.credentials.apiLoginId || ''}
                   onChange={(e) => handleCredentialChange('apiLoginId', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                   placeholder="API Login ID"
                 />
               </div>
@@ -469,7 +593,8 @@ export default function Merchants() {
                   type="password"
                   value={formData.credentials.transactionKey || ''}
                   onChange={(e) => handleCredentialChange('transactionKey', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                   placeholder="Transaction Key"
                 />
               </div>
@@ -478,7 +603,8 @@ export default function Merchants() {
                 <select
                   value={formData.credentials.mode || 'sandbox'}
                   onChange={(e) => handleCredentialChange('mode', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                 >
                   <option value="sandbox">Sandbox</option>
                   <option value="live">Live</option>
@@ -511,7 +637,8 @@ export default function Merchants() {
                   type="password"
                   value={formData.credentials.security_key || ''}
                   onChange={(e) => handleCredentialChange('security_key', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                   placeholder="NMI Security Key (from API Settings)"
                 />
                 <p className="text-xs text-gray-500 mt-1">
@@ -525,7 +652,8 @@ export default function Merchants() {
                   type="text"
                   value={formData.credentials.tokenizationKey || ''}
                   onChange={(e) => handleCredentialChange('tokenizationKey', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                   placeholder="NMI Tokenization Key (for Collect.js)"
                 />
                 <p className="text-xs text-gray-500 mt-1">
@@ -538,7 +666,8 @@ export default function Merchants() {
                 <select
                   value={formData.credentials.mode || 'sandbox'}
                   onChange={(e) => handleCredentialChange('mode', e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                 >
                   <option value="sandbox">Sandbox (Test)</option>
                   <option value="live">Live (Production)</option>
@@ -648,6 +777,22 @@ export default function Merchants() {
           </div>
         </div>
       </Modal>
+
+      {/* Verification Modal */}
+      <VerificationModal
+        isOpen={verificationModal.open}
+        onClose={() => setVerificationModal({ open: false, action: '', merchantId: null, merchant: null })}
+        onVerified={handleVerificationComplete}
+        action={verificationModal.action}
+        targetId={verificationModal.merchantId}
+        targetName={verificationModal.merchant?.nickname}
+        actionLabel={
+          verificationModal.action === 'toggle_merchant' ? 'Toggle Merchant' :
+          verificationModal.action === 'reset_volume' ? 'Reset Volume' :
+          verificationModal.action === 'reset_ticket_size' ? 'Reset Ticket Size' : 'Verify'
+        }
+        skipVerify={true}
+      />
     </div>
   );
 }

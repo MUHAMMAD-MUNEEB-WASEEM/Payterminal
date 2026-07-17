@@ -9,7 +9,7 @@ const auth = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await db.users.findOne({ _id: decoded.id });
     if (!user) return res.status(401).json({ message: 'User not found' });
-    if (user.role !== 'admin' && user.status !== 'approved') {
+    if (user.role !== 'admin' && user.role !== 'compliance' && user.status !== 'approved') {
       return res.status(403).json({ message: 'Account not approved' });
     }
 
@@ -26,4 +26,11 @@ const adminOnly = (req, res, next) => {
   next();
 };
 
-module.exports = { auth, adminOnly };
+const adminOrCompliance = (req, res, next) => {
+  if (req.user?.role !== 'admin' && req.user?.role !== 'compliance') {
+    return res.status(403).json({ message: 'Admin or Compliance access required' });
+  }
+  next();
+};
+
+module.exports = { auth, adminOnly, adminOrCompliance };

@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { auth, adminOnly } = require('../middleware/auth');
+const { auth, adminOnly, adminOrCompliance } = require('../middleware/auth');
 
-// Get all merchants (admin only)
-router.get('/', auth, adminOnly, async (req, res) => {
+// Get all merchants (admin or compliance)
+router.get('/', auth, adminOrCompliance, async (req, res) => {
   try {
     const merchants = await db.merchants.find({});
     // Don't send full credentials to frontend, only masked info
@@ -18,8 +18,8 @@ router.get('/', auth, adminOnly, async (req, res) => {
   }
 });
 
-// Get single merchant (admin only)
-router.get('/:id', auth, adminOnly, async (req, res) => {
+// Get single merchant (admin or compliance)
+router.get('/:id', auth, adminOrCompliance, async (req, res) => {
   try {
     const merchant = await db.merchants.findOne({ _id: req.params.id });
     if (!merchant) return res.status(404).json({ message: 'Merchant not found' });
@@ -100,8 +100,8 @@ router.delete('/:id', auth, adminOnly, async (req, res) => {
   }
 });
 
-// Get brands for a merchant (admin only)
-router.get('/brand-list/:merchantId', auth, adminOnly, async (req, res) => {
+// Get brands for a merchant (admin or compliance)
+router.get('/brand-list/:merchantId', auth, adminOrCompliance, async (req, res) => {
   try {
     const brandMerchants = await db.brandMerchants.find({ merchantId: req.params.merchantId });
     const brandIds = brandMerchants.map(bm => bm.brandId);
@@ -157,8 +157,8 @@ router.get('/brand/:brandId/public', async (req, res) => {
   }
 });
 
-// Get merchants for a brand (admin only)
-router.get('/brand/:brandId', auth, adminOnly, async (req, res) => {
+// Get merchants for a brand (admin or compliance)
+router.get('/brand/:brandId', auth, adminOrCompliance, async (req, res) => {
   try {
     const brandMerchants = await db.brandMerchants.find({ brandId: req.params.brandId });
     const merchantIds = brandMerchants.map(bm => bm.merchantId);
@@ -410,6 +410,169 @@ router.post('/debug-beyondbancard-payment', auth, adminOnly, async (req, res) =>
       error: err.message,
       stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
+  }
+});
+
+// Reset merchant volume with verification (admin or compliance)
+router.post('/:id/reset-volume', auth, adminOrCompliance, async (req, res) => {
+  try {
+    const { verificationCode } = req.body;
+    
+    const merchant = await db.merchants.findOne({ _id: req.params.id });
+    if (!merchant) return res.status(404).json({ message: 'Merchant not found' });
+    
+    // Compliance users need verification code, admin users bypass
+    if (req.user.role === 'compliance') {
+      if (!verificationCode) {
+        return res.status(400).json({ message: 'Verification code is required' });
+      }
+      
+      // Verify the code
+      const verification = await db.verificationCodes.findOne({
+        code: verificationCode,
+        userId: req.user._id,
+        action: 'reset_volume',
+        targetId: req.params.id,
+        used: false,
+      });
+      
+      if (!verification) {
+        return res.status(400).json({ message: 'Invalid or already used verification code' });
+      }
+      
+      if (new Date(verification.expiresAt) < new Date()) {
+        return res.status(400).json({ message: 'Verification code has expired' });
+      }
+      
+      // Mark verification as used
+      await db.verificationCodes.update(
+        { _id: verification._id },
+        { $set: { used: true, usedAt: new Date().toISOString() } }
+      );
+    }
+    
+    // Reset the volume
+    await db.merchants.update(
+      { _id: req.params.id },
+      { $set: { processedAmount: 0, updatedAt: new Date().toISOString() } }
+    );
+    
+    const updatedMerchant = await db.merchants.findOne({ _id: req.params.id });
+    res.json({
+      message: `Merchant volume reset successfully`,
+      merchant: updatedMerchant,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Reset merchant ticket size with verification (admin or compliance)
+router.post('/:id/reset-ticket-size', auth, adminOrCompliance, async (req, res) => {
+  try {
+    const { verificationCode, ticketSize } = req.body;
+    
+    const merchant = await db.merchants.findOne({ _id: req.params.id });
+    if (!merchant) return res.status(404).json({ message: 'Merchant not found' });
+    
+    // Compliance users need verification code, admin users bypass
+    if (req.user.role === 'compliance') {
+      if (!verificationCode) {
+        return res.status(400).json({ message: 'Verification code is required' });
+      }
+      
+      // Verify the code
+      const verification = await db.verificationCodes.findOne({
+        code: verificationCode,
+        userId: req.user._id,
+        action: 'reset_ticket_size',
+        targetId: req.params.id,
+        used: false,
+      });
+      
+      if (!verification) {
+        return res.status(400).json({ message: 'Invalid or already used verification code' });
+      }
+      
+      if (new Date(verification.expiresAt) < new Date()) {
+        return res.status(400).json({ message: 'Verification code has expired' });
+      }
+      
+      // Mark verification as used
+      await db.verificationCodes.update(
+        { _id: verification._id },
+        { $set: { used: true, usedAt: new Date().toISOString() } }
+      );
+    }
+    
+    // Update ticket size
+    await db.merchants.update(
+      { _id: req.params.id },
+      { $set: { ticketSize: ticketSize ? Number(ticketSize) : null, updatedAt: new Date().toISOString() } }
+    );
+    
+    const updatedMerchant = await db.merchants.findOne({ _id: req.params.id });
+    res.json({
+      message: `Merchant ticket size updated successfully`,
+      merchant: updatedMerchant,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Toggle merchant active status with verification (admin or compliance)
+router.post('/:id/toggle-active', auth, adminOrCompliance, async (req, res) => {
+  try {
+    const { verificationCode } = req.body;
+    
+    const merchant = await db.merchants.findOne({ _id: req.params.id });
+    if (!merchant) return res.status(404).json({ message: 'Merchant not found' });
+    
+    // Compliance users need verification code, admin users bypass
+    if (req.user.role === 'compliance') {
+      if (!verificationCode) {
+        return res.status(400).json({ message: 'Verification code is required' });
+      }
+      
+      // Verify the code
+      const verification = await db.verificationCodes.findOne({
+        code: verificationCode,
+        userId: req.user._id,
+        action: 'toggle_merchant',
+        targetId: req.params.id,
+        used: false,
+      });
+      
+      if (!verification) {
+        return res.status(400).json({ message: 'Invalid or already used verification code' });
+      }
+      
+      if (new Date(verification.expiresAt) < new Date()) {
+        return res.status(400).json({ message: 'Verification code has expired' });
+      }
+      
+      // Mark verification as used
+      await db.verificationCodes.update(
+        { _id: verification._id },
+        { $set: { used: true, usedAt: new Date().toISOString() } }
+      );
+    }
+    
+    // Toggle active status
+    const newStatus = !merchant.isActive;
+    await db.merchants.update(
+      { _id: req.params.id },
+      { $set: { isActive: newStatus, updatedAt: new Date().toISOString() } }
+    );
+    
+    const updatedMerchant = await db.merchants.findOne({ _id: req.params.id });
+    res.json({
+      message: `Merchant ${newStatus ? 'activated' : 'deactivated'} successfully`,
+      merchant: updatedMerchant,
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 

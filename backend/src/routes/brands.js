@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const db = require('../db');
-const { auth, adminOnly } = require('../middleware/auth');
+const { auth, adminOnly, adminOrCompliance } = require('../middleware/auth');
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -37,11 +37,40 @@ router.get('/:id', auth, async (req, res) => {
   }
 });
 
-router.post('/', auth, adminOnly, upload.single('logo'), async (req, res) => {
+router.post('/', auth, adminOrCompliance, upload.single('logo'), async (req, res) => {
   try {
-    const { name, brandNo, redirectUrl, enableRedirect } = req.body;
+    const { name, brandNo, redirectUrl, enableRedirect, verificationCode } = req.body;
     if (!name) return res.status(400).json({ message: 'Brand name is required' });
     if (!req.file) return res.status(400).json({ message: 'Brand logo is required' });
+
+    // Compliance users need verification code
+    if (req.user.role === 'compliance') {
+      if (!verificationCode) {
+        return res.status(400).json({ message: 'Verification code is required for compliance users' });
+      }
+
+      // Verify the code
+      const verification = await db.verificationCodes.findOne({
+        code: verificationCode.trim(),
+        userId: req.user._id,
+        action: 'create_brand',
+        used: false,
+      });
+
+      if (!verification) {
+        return res.status(400).json({ message: 'Invalid or already used verification code' });
+      }
+
+      if (new Date(verification.expiresAt) < new Date()) {
+        return res.status(400).json({ message: 'Verification code has expired' });
+      }
+
+      // Mark verification as used
+      await db.verificationCodes.update(
+        { _id: verification._id },
+        { $set: { used: true, usedAt: new Date().toISOString() } }
+      );
+    }
 
     const brand = await db.brands.insert({
       name,
@@ -58,11 +87,40 @@ router.post('/', auth, adminOnly, upload.single('logo'), async (req, res) => {
   }
 });
 
-router.put('/:id', auth, adminOnly, upload.single('logo'), async (req, res) => {
+router.put('/:id', auth, adminOrCompliance, upload.single('logo'), async (req, res) => {
   try {
-    const { name, brandNo, redirectUrl, enableRedirect } = req.body;
+    const { name, brandNo, redirectUrl, enableRedirect, verificationCode } = req.body;
     const brand = await db.brands.findOne({ _id: req.params.id });
     if (!brand) return res.status(404).json({ message: 'Brand not found' });
+
+    // Compliance users need verification code
+    if (req.user.role === 'compliance') {
+      if (!verificationCode) {
+        return res.status(400).json({ message: 'Verification code is required for compliance users' });
+      }
+
+      // Verify the code
+      const verification = await db.verificationCodes.findOne({
+        code: verificationCode.trim(),
+        userId: req.user._id,
+        action: 'edit_brand',
+        used: false,
+      });
+
+      if (!verification) {
+        return res.status(400).json({ message: 'Invalid or already used verification code' });
+      }
+
+      if (new Date(verification.expiresAt) < new Date()) {
+        return res.status(400).json({ message: 'Verification code has expired' });
+      }
+
+      // Mark verification as used
+      await db.verificationCodes.update(
+        { _id: verification._id },
+        { $set: { used: true, usedAt: new Date().toISOString() } }
+      );
+    }
 
     const updates = {
       name: name || brand.name,
@@ -87,10 +145,41 @@ router.put('/:id', auth, adminOnly, upload.single('logo'), async (req, res) => {
   }
 });
 
-router.delete('/:id', auth, adminOnly, async (req, res) => {
+router.delete('/:id', auth, adminOrCompliance, async (req, res) => {
   try {
+    const { verificationCode } = req.query;
     const brand = await db.brands.findOne({ _id: req.params.id });
     if (!brand) return res.status(404).json({ message: 'Brand not found' });
+
+    // Compliance users need verification code
+    if (req.user.role === 'compliance') {
+      if (!verificationCode) {
+        return res.status(400).json({ message: 'Verification code is required for compliance users' });
+      }
+
+      // Verify the code
+      const verification = await db.verificationCodes.findOne({
+        code: verificationCode.trim(),
+        userId: req.user._id,
+        action: 'delete_brand',
+        used: false,
+      });
+
+      if (!verification) {
+        return res.status(400).json({ message: 'Invalid or already used verification code' });
+      }
+
+      if (new Date(verification.expiresAt) < new Date()) {
+        return res.status(400).json({ message: 'Verification code has expired' });
+      }
+
+      // Mark verification as used
+      await db.verificationCodes.update(
+        { _id: verification._id },
+        { $set: { used: true, usedAt: new Date().toISOString() } }
+      );
+    }
+
     if (brand.logo) {
       const logoPath = path.join(__dirname, '../..', brand.logo);
       if (fs.existsSync(logoPath)) fs.unlinkSync(logoPath);

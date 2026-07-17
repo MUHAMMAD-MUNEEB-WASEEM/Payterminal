@@ -3,7 +3,7 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const db = require('../db');
-const { auth } = require('../middleware/auth');
+const { auth, adminOnly } = require('../middleware/auth');
 
 router.post('/login', async (req, res) => {
   try {
@@ -39,6 +39,36 @@ router.post('/signup', async (req, res) => {
       createdAt: new Date().toISOString(),
     });
     res.status(201).json({ message: 'Account created. Awaiting admin approval.' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin-only endpoint to create compliance users (auto-approved)
+router.post('/register', auth, adminOnly, async (req, res) => {
+  try {
+    const { username, email, password, role } = req.body;
+    
+    // Validate role
+    if (!['user', 'compliance'].includes(role)) {
+      return res.status(400).json({ message: 'Invalid role' });
+    }
+
+    const exists = await db.users.findOne({ $or: [{ username }, { email }] });
+    if (exists) return res.status(400).json({ message: 'Username or email already exists' });
+
+    const hashed = await bcrypt.hash(password, 10);
+    const newUser = await db.users.insert({
+      username, 
+      email, 
+      password: hashed,
+      role: role || 'user',
+      status: 'approved', // Auto-approve admin-created users
+      createdAt: new Date().toISOString(),
+    });
+
+    const { password: _, ...safeUser } = newUser;
+    res.status(201).json({ message: 'User created successfully', user: safeUser });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

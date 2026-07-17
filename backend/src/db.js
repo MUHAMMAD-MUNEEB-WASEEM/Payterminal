@@ -17,6 +17,7 @@ const db = {
   brandMerchants: new Datastore({ filename: path.join(dbDir, 'brand_merchants.db'), autoload: true }),
   userBrands: new Datastore({ filename: path.join(dbDir, 'user_brands.db'), autoload: true }),
   notifications: new Datastore({ filename: path.join(dbDir, 'notifications.db'), autoload: true }),
+  verificationCodes: new Datastore({ filename: path.join(dbDir, 'verification_codes.db'), autoload: true }),
 };
 
 // Promisify helpers
@@ -43,4 +44,5 @@ module.exports = {
   brandMerchants: promisify(db.brandMerchants),
   userBrands: promisify(db.userBrands),
   notifications: promisify(db.notifications),
+  verificationCodes: promisify(db.verificationCodes),
 };

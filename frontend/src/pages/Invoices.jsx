@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import api from '../api/axios';
 import Modal from '../components/Modal';
 import InvoiceView from '../components/InvoiceView';
+import VerificationModal from '../components/VerificationModal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Eye, Trash2, Link as LinkIcon, FileText, RefreshCw, CheckCircle, AlertCircle, Undo2, User, MapPin, CreditCard } from 'lucide-react';
+import { Plus, Eye, Trash2, Link as LinkIcon, FileText, RefreshCw, CheckCircle, AlertCircle, Undo2, User, MapPin, CreditCard, Archive, ArchiveRestore, Lock, Search } from 'lucide-react';
 
 const EMPTY_FORM = { 
   brandId: '', 
@@ -32,12 +33,20 @@ export default function Invoices() {
   const [billingDetailsModal, setBillingDetailsModal] = useState(null);
   const [billingDetails, setBillingDetails] = useState(null);
   const [loadingBillingDetails, setLoadingBillingDetails] = useState(false);
+  const [verificationModal, setVerificationModal] = useState({ open: false, action: '', invoiceId: null, invoiceNumber: null, pendingAmount: null });
+  const [activeTab, setActiveTab] = useState('active'); // 'active' or 'archived'
+  
+  // Database Query Search states
+  const [showDbSearch, setShowDbSearch] = useState(false);
+  const [dbSearchQuery, setDbSearchQuery] = useState('');
+  const [dbSearchResults, setDbSearchResults] = useState([]);
+  const [dbSearchLoading, setDbSearchLoading] = useState(false);
 
   const fetchAll = async () => {
     try {
       const invRes = await api.get('/invoices');
       // Fetch brands based on user role
-      const brandRes = user?.role === 'admin' 
+      const brandRes = (user?.role === 'admin' || user?.role === 'compliance')
         ? await api.get('/brands')
         : await api.get('/user-brands/my-brands');
       
@@ -215,7 +224,64 @@ export default function Invoices() {
     }
   };
 
-  const handleRefund = async (invoice) => {
+  const handleArchive = async (invoiceId, verificationCode = null) => {
+    try {
+      const payload = verificationCode ? { verificationCode } : {};
+      await api.patch(`/invoices/${invoiceId}/archive`, payload);
+      toast.success('Invoice archived successfully');
+      fetchAll();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to archive invoice');
+    }
+  };
+
+  const handleUnarchive = async (invoiceId, verificationCode = null) => {
+    try {
+      const payload = verificationCode ? { verificationCode } : {};
+      await api.patch(`/invoices/${invoiceId}/unarchive`, payload);
+      toast.success('Invoice unarchived successfully');
+      fetchAll();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to unarchive invoice');
+    }
+  };
+
+  const requestArchive = (invoiceId) => {
+    if (user?.role === 'compliance') {
+      setVerificationModal({ open: true, action: 'archive_invoice', invoiceId });
+    } else {
+      handleArchive(invoiceId);
+    }
+  };
+
+  const requestUnarchive = (invoiceId) => {
+    if (user?.role === 'compliance') {
+      setVerificationModal({ open: true, action: 'unarchive_invoice', invoiceId });
+    } else {
+      handleUnarchive(invoiceId);
+    }
+  };
+
+  const handleVerificationComplete = (code) => {
+    const { action, invoiceId, pendingAmount } = verificationModal;
+    if (action === 'archive_invoice') {
+      handleArchive(invoiceId, code);
+    } else if (action === 'unarchive_invoice') {
+      handleUnarchive(invoiceId, code);
+    } else if (action === 'update_refund') {
+      const invoice = invoices.find(inv => inv._id === invoiceId);
+      if (invoice) {
+        handleRefund(invoice, code);
+      }
+    } else if (action === 'update_chargeback') {
+      const invoice = invoices.find(inv => inv._id === invoiceId);
+      if (invoice) {
+        handleChargeback(invoice, code);
+      }
+    }
+  };
+
+  const handleRefund = async (invoice, verificationCode = null) => {
     if (!refundAmount || parseFloat(refundAmount) <= 0) {
       toast.error('Enter a valid refund amount');
       return;
@@ -224,8 +290,26 @@ export default function Invoices() {
       toast.error('Refund amount cannot exceed invoice total');
       return;
     }
+    
+    // If compliance user and no verification code, request verification
+    if (user?.role === 'compliance' && !verificationCode) {
+      setVerificationModal({ 
+        open: true, 
+        action: 'update_refund', 
+        invoiceId: invoice._id,
+        invoiceNumber: invoice.invoiceNumber,
+        pendingAmount: parseFloat(refundAmount)
+      });
+      return;
+    }
+    
     try {
-      await api.patch(`/invoices/${invoice._id}/refund`, { refundAmount: parseFloat(refundAmount) });
+      const payload = { refundAmount: parseFloat(refundAmount) };
+      if (verificationCode) {
+        payload.verificationCode = verificationCode;
+      }
+      
+      await api.patch(`/invoices/${invoice._id}/refund`, payload);
       toast.success('Invoice marked as refunded');
       setRefundModal(null);
       setRefundAmount('');
@@ -235,7 +319,7 @@ export default function Invoices() {
     }
   };
 
-  const handleChargeback = async (invoice) => {
+  const handleChargeback = async (invoice, verificationCode = null) => {
     if (!chargebackAmount || parseFloat(chargebackAmount) <= 0) {
       toast.error('Enter a valid chargeback amount');
       return;
@@ -244,8 +328,26 @@ export default function Invoices() {
       toast.error('Chargeback amount cannot exceed invoice total');
       return;
     }
+    
+    // If compliance user and no verification code, request verification
+    if (user?.role === 'compliance' && !verificationCode) {
+      setVerificationModal({ 
+        open: true, 
+        action: 'update_chargeback', 
+        invoiceId: invoice._id,
+        invoiceNumber: invoice.invoiceNumber,
+        pendingAmount: parseFloat(chargebackAmount)
+      });
+      return;
+    }
+    
     try {
-      await api.patch(`/invoices/${invoice._id}/chargeback`, { chargebackAmount: parseFloat(chargebackAmount) });
+      const payload = { chargebackAmount: parseFloat(chargebackAmount) };
+      if (verificationCode) {
+        payload.verificationCode = verificationCode;
+      }
+      
+      await api.patch(`/invoices/${invoice._id}/chargeback`, payload);
       toast.success('Invoice marked as chargebacked');
       setChargebackModal(null);
       setChargebackAmount('');
@@ -272,6 +374,30 @@ export default function Invoices() {
       setLoadingBillingDetails(false);
     }
   };
+  
+  // Database Query Search
+  const handleDbSearch = async () => {
+    if (!dbSearchQuery.trim()) {
+      toast.error('Please enter a search term');
+      return;
+    }
+    
+    setDbSearchLoading(true);
+    try {
+      const res = await api.get(`/invoices/db-search?q=${encodeURIComponent(dbSearchQuery)}`);
+      setDbSearchResults(res.data);
+      
+      if (res.data.length === 0) {
+        toast.info('No results found');
+      } else {
+        toast.success(`Found ${res.data.length} result${res.data.length !== 1 ? 's' : ''}`);
+      }
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Search failed');
+    } finally {
+      setDbSearchLoading(false);
+    }
+  };
 
   const statusBadge = (status, refundAmount, chargebackAmount) => {
     const map = {
@@ -288,11 +414,24 @@ export default function Invoices() {
     return <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${map[status] || ''}`}>{label}</span>;
   };
 
-  // Filter invoices based on search term
-  const filteredInvoices = invoices.filter(inv => 
-    (inv.invoiceNumber?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-    (inv.customerName?.toLowerCase() || '').includes(searchTerm.toLowerCase())
-  );
+  // Filter invoices based on search term and active tab
+  const filteredInvoices = invoices.filter(inv => {
+    // Enhanced search: invoice number, customer name, email, transaction ID, IP address
+    const searchLower = searchTerm.toLowerCase();
+    const matchesSearch = 
+      (inv.invoiceNumber?.toLowerCase() || '').includes(searchLower) ||
+      (inv.customerName?.toLowerCase() || '').includes(searchLower) ||
+      (inv.customerEmail?.toLowerCase() || '').includes(searchLower) ||
+      (inv.paymentOrderRef?.toLowerCase() || '').includes(searchLower) ||
+      (inv.billingDetails?.clientIp?.toLowerCase() || '').includes(searchLower) ||
+      (inv.customerSerialNumber?.toLowerCase() || '').includes(searchLower);
+    
+    const matchesTab = activeTab === 'archived' ? inv.archived : !inv.archived;
+    return matchesSearch && matchesTab;
+  });
+
+  const activeInvoices = invoices.filter(inv => !inv.archived);
+  const archivedInvoices = invoices.filter(inv => inv.archived);
 
   if (loading) return <div className="flex items-center justify-center h-64"><div className="animate-spin w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full" /></div>;
 
@@ -301,11 +440,14 @@ export default function Invoices() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Invoices</h1>
-          <p className="text-gray-500 text-sm mt-1">{filteredInvoices.length} of {invoices.length} invoice{invoices.length !== 1 ? 's' : ''}</p>
+          <p className="text-gray-500 text-sm mt-1">{filteredInvoices.length} of {activeTab === 'archived' ? archivedInvoices.length : activeInvoices.length} invoice{filteredInvoices.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="flex gap-2">
           <button onClick={fetchAll} className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors">
             <RefreshCw size={16} /> Refresh
+          </button>
+          <button onClick={() => setShowDbSearch(true)} className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors">
+            <Search size={16} /> DB Query Search
           </button>
           <button onClick={() => { setForm(EMPTY_FORM); setShowCreate(true); }} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors">
             <Plus size={16} /> New Invoice
@@ -313,15 +455,48 @@ export default function Invoices() {
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="bg-white rounded-lg border border-gray-200 p-1 flex gap-1">
+        <button
+          onClick={() => setActiveTab('active')}
+          className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+            activeTab === 'active' 
+              ? 'bg-blue-600 text-white' 
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <span className="flex items-center justify-center gap-2">
+            <FileText size={16} />
+            Active ({activeInvoices.length})
+          </span>
+        </button>
+        <button
+          onClick={() => setActiveTab('archived')}
+          className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+            activeTab === 'archived' 
+              ? 'bg-gray-600 text-white' 
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <span className="flex items-center justify-center gap-2">
+            <Archive size={16} />
+            Archived ({archivedInvoices.length})
+          </span>
+        </button>
+      </div>
+
       {/* Search Bar */}
       <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <input
-          type="text"
-          placeholder="Search by invoice number or customer name..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-        />
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
+          <input
+            type="text"
+            placeholder="Search by invoice #, customer name, email, transaction ID, IP address, serial #..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+          />
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -413,7 +588,7 @@ export default function Invoices() {
                           <RefreshCw size={15} />
                         </span>
                       )}
-                      {user?.role === 'admin' && ['paid', 'refunded', 'chargebacked'].includes(inv.status) && (
+                      {(user?.role === 'admin' || user?.role === 'compliance') && ['paid', 'refunded', 'chargebacked'].includes(inv.status) && (
                         <>
                           <button onClick={() => { setRefundModal(inv); setRefundAmount(inv.total); }} title="Refund" className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors">
                             <AlertCircle size={15} />
@@ -423,9 +598,21 @@ export default function Invoices() {
                           </button>
                         </>
                       )}
-                      <button onClick={() => handleDelete(inv._id)} title="Delete" className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors">
-                        <Trash2 size={15} />
-                      </button>
+                      {(user?.role === 'admin' || user?.role === 'compliance') && !inv.archived && (
+                        <button onClick={() => requestArchive(inv._id)} title="Archive" className="p-1.5 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors">
+                          <Archive size={15} />
+                        </button>
+                      )}
+                      {(user?.role === 'admin' || user?.role === 'compliance') && inv.archived && (
+                        <button onClick={() => requestUnarchive(inv._id)} title="Unarchive" className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-600 transition-colors">
+                          <ArchiveRestore size={15} />
+                        </button>
+                      )}
+                      {user?.role === 'admin' && (
+                        <button onClick={() => handleDelete(inv._id)} title="Delete" className="p-1.5 rounded-lg hover:bg-red-50 text-red-500 transition-colors">
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -659,6 +846,23 @@ export default function Invoices() {
               </div>
             </div>
 
+            {/* Merchant Info */}
+            {billingDetails.merchant && (
+              <div className="bg-purple-50 rounded-lg p-4">
+                <h3 className="text-sm font-semibold text-gray-700 mb-2">Payment Merchant</h3>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <p className="text-gray-600">Merchant Name</p>
+                    <p className="font-medium text-gray-900">{billingDetails.merchant.nickname}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600">Gateway</p>
+                    <p className="font-medium capitalize text-gray-900">{billingDetails.merchant.gateway}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Customer Info */}
             <div>
               <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
@@ -677,6 +881,12 @@ export default function Invoices() {
                   <p className="text-gray-600 text-xs">Serial Number</p>
                   <p className="font-medium text-gray-900">{billingDetails.customerSerialNumber}</p>
                 </div>
+                {billingDetails.billingDetails?.userAgent && (
+                  <div className="col-span-2">
+                    <p className="text-gray-600 text-xs">Browser/User Agent</p>
+                    <p className="font-mono text-xs text-gray-900 break-all">{billingDetails.billingDetails.userAgent}</p>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -744,12 +954,56 @@ export default function Invoices() {
                       <p className="text-gray-600 text-xs">Card Last 4 Digits</p>
                       <p className="font-mono font-medium text-gray-900">••••{billingDetails.billingDetails.cardLast4}</p>
                     </div>
+                    {billingDetails.billingDetails.cardExpiry && (
+                      <div>
+                        <p className="text-gray-600 text-xs">Card Expiry</p>
+                        <p className="font-mono font-medium text-gray-900">{billingDetails.billingDetails.cardExpiry}</p>
+                      </div>
+                    )}
                     <div>
                       <p className="text-gray-600 text-xs">Payment Gateway</p>
                       <p className="font-medium capitalize text-gray-900">{billingDetails.billingDetails.paymentGateway}</p>
                     </div>
                   </div>
                 </div>
+
+                {/* Payment Security Information */}
+                {(billingDetails.billingDetails.paymentTimestamp || billingDetails.billingDetails.clientIp || billingDetails.billingDetails.deviceFingerprint) && (
+                  <div className="bg-amber-50 rounded-lg p-4">
+                    <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+                      <Lock size={16} /> Transaction Security Details
+                    </h3>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      {billingDetails.billingDetails.paymentTimestamp && (
+                        <div>
+                          <p className="text-gray-600 text-xs">Payment Completed</p>
+                          <p className="font-medium text-gray-900">
+                            {new Date(billingDetails.billingDetails.paymentTimestamp).toLocaleString('en-US', {
+                              year: 'numeric',
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              second: '2-digit'
+                            })}
+                          </p>
+                        </div>
+                      )}
+                      {billingDetails.billingDetails.clientIp && (
+                        <div>
+                          <p className="text-gray-600 text-xs">Client IP Address</p>
+                          <p className="font-mono font-medium text-gray-900">{billingDetails.billingDetails.clientIp}</p>
+                        </div>
+                      )}
+                      {billingDetails.billingDetails.deviceFingerprint && (
+                        <div className="col-span-2">
+                          <p className="text-gray-600 text-xs">Device Fingerprint</p>
+                          <p className="font-mono text-xs text-gray-900 break-all">{billingDetails.billingDetails.deviceFingerprint}</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </>
             )}
 
@@ -762,6 +1016,184 @@ export default function Invoices() {
             )}
           </div>
         )}
+      </Modal>
+
+      {/* Verification Modal */}
+      <VerificationModal
+        isOpen={verificationModal.open}
+        onClose={() => setVerificationModal({ open: false, action: '', invoiceId: null, invoiceNumber: null, pendingAmount: null })}
+        onVerified={handleVerificationComplete}
+        action={verificationModal.action}
+        targetId={verificationModal.invoiceId}
+        targetName={verificationModal.invoiceNumber}
+        actionLabel={
+          verificationModal.action === 'archive_invoice' ? 'Archive Invoice' :
+          verificationModal.action === 'unarchive_invoice' ? 'Unarchive Invoice' :
+          verificationModal.action === 'update_refund' ? 'Update Refund' :
+          verificationModal.action === 'update_chargeback' ? 'Update Chargeback' : 'Verify'
+        }
+        skipVerify={true}
+      />
+      
+      {/* Database Query Search Modal */}
+      <Modal isOpen={showDbSearch} title="Database Query Search" onClose={() => { setShowDbSearch(false); setDbSearchQuery(''); setDbSearchResults([]); }} size="xl">
+        <div className="space-y-4">
+          {/* Search Input */}
+          <div className="flex gap-2">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+              <input
+                type="text"
+                placeholder="Search by invoice #, name, email, transaction ID, IP address, serial #..."
+                value={dbSearchQuery}
+                onChange={(e) => setDbSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleDbSearch()}
+                className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm"
+                autoFocus
+              />
+            </div>
+            <button
+              onClick={handleDbSearch}
+              disabled={dbSearchLoading}
+              className="px-6 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
+            >
+              {dbSearchLoading ? 'Searching...' : 'Search'}
+            </button>
+          </div>
+          
+          {/* Results */}
+          {dbSearchResults.length > 0 && (
+            <div className="mt-6 space-y-4 max-h-[600px] overflow-y-auto">
+              {dbSearchResults.map((result) => (
+                <div key={result._id} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-3 pb-3 border-b border-gray-300">
+                    <div>
+                      <h3 className="font-mono font-semibold text-blue-600">{result.invoiceNumber}</h3>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {result.status && <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${
+                          result.status === 'paid' ? 'bg-green-100 text-green-700' :
+                          result.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>{result.status}</span>}
+                        {result.total && <span className="ml-2 font-semibold">${result.total.toFixed(2)}</span>}
+                      </p>
+                    </div>
+                    {result.paymentTimestamp && (
+                      <div className="text-right text-xs text-gray-500">
+                        <div>Payment: {new Date(result.paymentTimestamp).toLocaleString()}</div>
+                        <div className="mt-1">Created: {new Date(result.createdAt).toLocaleString()}</div>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Customer Info */}
+                  <div className="grid grid-cols-2 gap-4 mb-3">
+                    <div>
+                      <p className="text-xs text-gray-500">Customer Name</p>
+                      <p className="font-medium text-gray-900">{result.customerName}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Email</p>
+                      <p className="font-medium text-gray-900">{result.email}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-gray-500">Serial Number</p>
+                      <p className="font-medium text-gray-900">{result.customerSerialNumber}</p>
+                    </div>
+                    {result.transactionId && (
+                      <div>
+                        <p className="text-xs text-gray-500">Transaction ID</p>
+                        <p className="font-mono text-xs text-gray-900 break-all">{result.transactionId}</p>
+                      </div>
+                    )}
+                  </div>
+                  
+                  {/* Payment Details */}
+                  {(result.ipAddress || result.paymentGateway || result.cardLast4) && (
+                    <div className="bg-purple-50 rounded p-3 mb-3">
+                      <p className="text-xs font-semibold text-gray-700 mb-2">Payment Details</p>
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        {result.ipAddress && (
+                          <div>
+                            <p className="text-gray-500">IP Address</p>
+                            <p className="font-mono font-medium text-gray-900">{result.ipAddress}</p>
+                          </div>
+                        )}
+                        {result.paymentGateway && (
+                          <div>
+                            <p className="text-gray-500">Gateway</p>
+                            <p className="font-medium capitalize text-gray-900">{result.paymentGateway}</p>
+                          </div>
+                        )}
+                        {result.cardLast4 && (
+                          <div>
+                            <p className="text-gray-500">Card</p>
+                            <p className="font-mono font-medium text-gray-900">••••{result.cardLast4}</p>
+                          </div>
+                        )}
+                        {result.cardExpiry && (
+                          <div>
+                            <p className="text-gray-500">Expiry</p>
+                            <p className="font-mono font-medium text-gray-900">{result.cardExpiry}</p>
+                          </div>
+                        )}
+                        {result.phone && (
+                          <div>
+                            <p className="text-gray-500">Phone</p>
+                            <p className="font-medium text-gray-900">{result.phone}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Device Info */}
+                  {(result.deviceFingerprint || result.userAgent) && (
+                    <div className="bg-amber-50 rounded p-3">
+                      <p className="text-xs font-semibold text-gray-700 mb-2">Device Information</p>
+                      {result.deviceFingerprint && (
+                        <div className="mb-2">
+                          <p className="text-xs text-gray-500">Device Fingerprint</p>
+                          <p className="font-mono text-xs text-gray-900 break-all">{result.deviceFingerprint}</p>
+                        </div>
+                      )}
+                      {result.userAgent && (
+                        <div>
+                          <p className="text-xs text-gray-500">User Agent</p>
+                          <p className="font-mono text-xs text-gray-900 break-all">{result.userAgent}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Address (if available) */}
+                  {result.addressLine1 && (
+                    <div className="mt-3 pt-3 border-t border-gray-300">
+                      <p className="text-xs font-semibold text-gray-700 mb-2">Billing Address</p>
+                      <p className="text-xs text-gray-900">
+                        {result.addressLine1}
+                        {result.city && `, ${result.city}`}
+                        {result.state && `, ${result.state}`}
+                        {result.postalCode && ` ${result.postalCode}`}
+                        {result.countryCode && `, ${result.countryCode}`}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          
+          {/* Empty State */}
+          {!dbSearchLoading && dbSearchResults.length === 0 && dbSearchQuery === '' && (
+            <div className="text-center py-12 text-gray-400">
+              <Search size={48} className="mx-auto mb-3 text-gray-300" />
+              <p className="text-sm">Enter a search term to query the database</p>
+              <p className="text-xs mt-2 text-gray-400">Search by invoice #, customer name, email, transaction ID, IP address, or serial #</p>
+            </div>
+          )}
+        </div>
       </Modal>
     </div>
   );

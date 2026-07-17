@@ -25,7 +25,7 @@ export default function Layout({ children }) {
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
-    if (user?.role === 'admin') {
+    if (user?.role === 'admin' || user?.role === 'compliance') {
       fetchNotifications();
       // Poll for new notifications every 30 seconds
       const interval = setInterval(fetchNotifications, 30000);
@@ -80,7 +80,7 @@ export default function Layout({ children }) {
     navigate('/login');
   };
 
-  const filteredNav = navItems.filter(item => !item.adminOnly || user?.role === 'admin');
+  const filteredNav = navItems.filter(item => !item.adminOnly || user?.role === 'admin' || user?.role === 'compliance');
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -155,8 +155,8 @@ export default function Layout({ children }) {
           </button>
           <span className="font-semibold text-gray-900 lg:hidden">PayTerminal</span>
           
-          {/* Notification Bell (Admin Only) */}
-          {user?.role === 'admin' && (
+          {/* Notification Bell (Admin and Compliance) */}
+          {(user?.role === 'admin' || user?.role === 'compliance') && (
             <div className="ml-auto relative">
               <button
                 onClick={() => setShowNotifications(!showNotifications)}
