@@ -47,6 +47,8 @@ export default function PublicInvoice() {
   const [paying, setPaying] = useState(false);
   const [collectJsReady, setCollectJsReady] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
+  const [paypalLoaded, setPaypalLoaded] = useState(false);
+  const paypalRef = useRef(null);
 
   useEffect(() => {
     const fetchInvoice = async () => {
@@ -74,6 +76,155 @@ export default function PublicInvoice() {
     };
     fetchInvoice();
   }, [invoiceId]);
+
+  // Load PayPal SDK if invoice has PayPal Direct enabled
+  useEffect(() => {
+    const loadPayPalSDK = async () => {
+      if (invoice?.usePayPalDirect && !paypalLoaded) {
+        try {
+          // Get PayPal merchant for this brand to extract client ID
+          const merchantsRes = await api.get(`/merchants/brand/${invoice.brandId}/public`);
+          const paypalMerchant = merchantsRes.data.find(m => m.gateway === 'paypal' && m.isActive);
+          
+          if (!paypalMerchant) {
+            toast.error('PayPal payment method not available');
+            return;
+          }
+          
+          // Extract client ID from merchant credentials
+          const clientId = paypalMerchant.credentials?.clientId;
+          const mode = paypalMerchant.credentials?.mode || 'sandbox';
+          
+          if (!clientId) {
+            console.error('PayPal client ID not configured');
+            toast.error('PayPal configuration error');
+            return;
+          }
+          
+          console.log('Loading PayPal SDK with client ID:', clientId.substring(0, 10) + '...');
+          console.log('Mode:', mode);
+          
+          const script = document.createElement('script');
+          script.src = `https://www.paypal.com/sdk/js?client-id=${clientId}&currency=USD`;
+          script.async = true;
+          script.onload = () => {
+            console.log('PayPal SDK loaded successfully');
+            setPaypalLoaded(true);
+          };
+          script.onerror = () => {
+            console.error('Failed to load PayPal SDK');
+            toast.error('Failed to load PayPal payment system');
+          };
+          document.body.appendChild(script);
+
+          return () => {
+            // Cleanup script if component unmounts
+            if (document.body.contains(script)) {
+              document.body.removeChild(script);
+            }
+          };
+        } catch (err) {
+          console.error('Error loading PayPal SDK:', err);
+          toast.error('Failed to initialize PayPal');
+        }
+      }
+    };
+    
+    loadPayPalSDK();
+  }, [invoice?.usePayPalDirect, invoice?.brandId, paypalLoaded]);
+
+  // Render PayPal Buttons after SDK loads
+  useEffect(() => {
+    if (paypalLoaded && window.paypal && paypalRef.current && invoice?.usePayPalDirect) {
+      console.log('Rendering PayPal Buttons...');
+      
+      // Clear any existing buttons
+      paypalRef.current.innerHTML = '';
+      
+      try {
+        window.paypal.Buttons({
+          style: {
+            layout: 'vertical',
+            color: 'blue',
+            shape: 'rect',
+            label: 'paypal'
+          },
+          createOrder: (data, actions) => {
+            console.log('Creating PayPal order for amount:', invoice.total);
+            return actions.order.create({
+              purchase_units: [{
+                reference_id: invoice.invoiceNumber,
+                description: `Invoice ${invoice.invoiceNumber} - ${invoice.brand?.name || 'Payment'}`,
+                custom_id: invoice.invoiceNumber,
+                amount: {
+                  currency_code: 'USD',
+                  value: invoice.total.toFixed(2)
+                }
+              }]
+            });
+          },
+          onApprove: async (data, actions) => {
+            console.log('Payment approved, capturing order...');
+            setPaying(true);
+            
+            try {
+              // Capture the order on PayPal's side
+              const order = await actions.order.capture();
+              console.log('PayPal order captured:', order);
+              
+              // Notify backend to mark invoice as paid
+              const res = await api.post(`/invoices/public/${invoiceId}/paypal-complete`, {
+                orderId: order.id,
+                payerId: order.payer.payer_id,
+                captureId: order.purchase_units[0].payments.captures[0].id,
+                payerEmail: order.payer.email_address,
+                payerName: order.payer.name
+              });
+              
+              console.log('Backend response:', res.data);
+              
+              if (res.data.status === 'paid') {
+                toast.success('Payment successful!');
+                
+                // Check for redirect
+                if (res.data.redirectUrl && res.data.enableRedirect === true) {
+                  console.log('Redirecting to:', res.data.redirectUrl);
+                  setTimeout(() => {
+                    window.location.href = res.data.redirectUrl;
+                  }, 2000);
+                } else {
+                  setTimeout(() => {
+                    setStep('success');
+                  }, 1000);
+                }
+              } else {
+                toast.error(res.data.message || 'Payment verification failed');
+              }
+            } catch (err) {
+              console.error('Error completing PayPal payment:', err);
+              toast.error(err.response?.data?.message || 'Payment completion failed');
+            } finally {
+              setPaying(false);
+            }
+          },
+          onError: (err) => {
+            console.error('PayPal error:', err);
+            toast.error('PayPal payment error');
+            setPaying(false);
+          },
+          onCancel: (data) => {
+            console.log('Payment cancelled by user');
+            toast.info('Payment cancelled');
+          }
+        }).render(paypalRef.current);
+        
+        console.log('PayPal Buttons rendered successfully');
+      } catch (err) {
+        console.error('Error rendering PayPal Buttons:', err);
+        toast.error('Failed to initialize PayPal buttons');
+      }
+    }
+  }, [paypalLoaded, invoice, invoiceId]);
 
   // Note: Collect.js loading removed - using raw card data instead
   // This avoids CDN dependency issues
@@ -518,9 +669,90 @@ export default function PublicInvoice() {
               </div>
             </div>
 
-            {/* Card Payment Form - Always show with first merchant */}
+            {/* Payment Method Selection */}
             {selectedMerchant ? (
               <div className="bg-white rounded-lg shadow-sm p-6">
+                {invoice?.usePayPalDirect ? (
+                  // PayPal Direct Checkout
+                  <div>
+                    <div className="flex items-center gap-2 mb-6">
+                      <span className="text-2xl">🅿️</span>
+                      <div>
+                        <h3 className="font-semibold text-gray-900">PayPal Checkout</h3>
+                        <p className="text-sm text-gray-600">Pay securely with your PayPal account</p>
+                      </div>
+                    </div>
+
+                    {/* Brand Information */}
+                    {invoice?.brand && (
+                      <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-4 mb-6 border border-blue-200">
+                        <div className="flex items-center gap-3">
+                          {invoice.brand.logoUrl ? (
+                            <img 
+                              src={getImageUrl(invoice.brand.logoUrl)} 
+                              alt={invoice.brand.name}
+                              className="w-12 h-12 object-contain rounded-lg bg-white p-1"
+                            />
+                          ) : (
+                            <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">
+                              {invoice.brand.name.charAt(0).toUpperCase()}
+                            </div>
+                          )}
+                          <div className="flex-1">
+                            <h4 className="font-semibold text-gray-900">{invoice.brand.name}</h4>
+                            <p className="text-sm text-gray-600">Secure payment powered by PayPal</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* PayPal Button Container */}
+                    <div className="space-y-4">
+                      {paying && (
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                          <div className="flex items-center gap-2">
+                            <div className="animate-spin w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full"></div>
+                            <span className="text-sm font-medium text-blue-900">Processing your payment...</span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      <div className="bg-gray-50 rounded-lg p-4 border-2 border-dashed border-gray-200">
+                        <div className="text-center py-8">
+                          <div className="text-4xl mb-2">🅿️</div>
+                          <h4 className="font-semibold text-gray-900 mb-2">PayPal Button</h4>
+                          <p className="text-sm text-gray-600 mb-4">
+                            Click the PayPal button below to complete your payment securely
+                          </p>
+                          
+                          {/* PayPal SDK Button will be rendered here */}
+                          <div id="paypal-button-container" ref={paypalRef} className="min-h-[50px]">
+                            {!paypalLoaded && (
+                              <div className="flex items-center justify-center py-4">
+                                <div className="animate-spin w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full mr-2"></div>
+                                <span className="text-sm text-gray-600">Loading PayPal...</span>
+                              </div>
+                            )}
+                          </div>
+                          
+                          <p className="text-xs text-gray-500 mt-4">
+                            You'll be redirected to PayPal to complete the payment securely.
+                            <br />No card details need to be entered on this page.
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Alternative payment note */}
+                      <div className="text-center">
+                        <p className="text-xs text-gray-500">
+                          Having trouble? Contact support for alternative payment methods.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  // Regular Card Payment Form
+                  <div>
                 <div className="flex items-center gap-2 mb-4">
                   <Lock size={18} className="text-gray-400" />
                   <h3 className="font-semibold text-gray-900">Card Details</h3>
@@ -756,6 +988,8 @@ export default function PublicInvoice() {
                     Your payment is secure and encrypted
                   </p>
                 </form>
+                  </div>
+                )}
               </div>
             ) : (
               /* No merchants available */

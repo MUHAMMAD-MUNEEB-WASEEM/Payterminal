@@ -12,7 +12,8 @@ const EMPTY_FORM = {
   items: [{ description: '', amount: '' }], 
   customerEmail: '',
   customerName: '',
-  customerSerialNumber: ''
+  customerSerialNumber: '',
+  usePayPalDirect: false
 };
 
 export default function Invoices() {
@@ -87,6 +88,7 @@ export default function Invoices() {
   }, 0);
   
   const [ticketSizeError, setTicketSizeError] = useState(null);
+  const [brandHasPayPal, setBrandHasPayPal] = useState(false);
   
   // Check ticket size when brand or total changes
   useEffect(() => {
@@ -108,6 +110,10 @@ export default function Invoices() {
         const res = await api.get(`/merchants/brand/${form.brandId}`);
         const merchants = res.data;
         
+        // Check if brand has PayPal merchant
+        const hasPayPal = merchants.some(m => m.gateway === 'paypal');
+        setBrandHasPayPal(hasPayPal);
+        
         for (const merchant of merchants) {
           // Only check if ticket size is set (optional field)
           if (merchant.ticketSize && merchant.ticketSize > 0 && total >= merchant.ticketSize) {
@@ -123,6 +129,7 @@ export default function Invoices() {
       } catch (err) {
         console.error('Error checking ticket size:', err);
         setTicketSizeError(null);
+        setBrandHasPayPal(false);
       }
     };
     
@@ -670,6 +677,29 @@ export default function Invoices() {
                 placeholder="e.g., SN-123456"
               />
             </div>
+
+            {/* PayPal Direct Checkout Option */}
+            {brandHasPayPal && (
+              <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-200 rounded-lg px-4 py-3">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.usePayPalDirect || false}
+                    onChange={e => setForm({ ...form, usePayPalDirect: e.target.checked })}
+                    className="w-5 h-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-2xl">🅿️</span>
+                      <span className="text-sm font-semibold text-gray-900">Enable PayPal Direct Checkout</span>
+                    </div>
+                    <p className="text-xs text-gray-600 mt-1">
+                      Show PayPal button widget on the payment page. Customers can pay directly with their PayPal account without entering card details.
+                    </p>
+                  </div>
+                </label>
+              </div>
+            )}
 
             <div>
               <div className="flex items-center justify-between mb-2">

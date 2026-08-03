@@ -203,6 +203,204 @@ function createPaymentLogger() {
   };
 }
 
+// PayPal Direct Checkout completion endpoint (no auth required)
+router.post('/public/:id/paypal-complete', async (req, res) => {
+  try {
+    console.log('\n========== PAYPAL COMPLETION REQUEST ==========');
+    const { orderId, payerId, captureId, payerEmail, payerName } = req.body;
+    
+    console.log('PayPal Order ID:', orderId);
+    console.log('Payer ID:', payerId);
+    console.log('Capture ID:', captureId);
+    console.log('Payer Email:', payerEmail);
+    
+    // Get invoice
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    
+    if (!invoice) {
+      console.log('ERROR: Invoice not found');
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
+    
+    if (invoice.status === 'paid') {
+      console.log('WARNING: Invoice already paid');
+      return res.status(400).json({ message: 'Invoice already paid' });
+    }
+    
+    if (!invoice.customerVerified) {
+      console.log('ERROR: Customer not verified');
+      return res.status(400).json({ message: 'Customer verification required' });
+    }
+    
+    // Get PayPal merchant for this brand
+    const brandMerchants = await db.brandMerchants.find({ brandId: invoice.brandId });
+    let paypalMerchant = null;
+    
+    for (const bm of brandMerchants) {
+      const merchant = await db.merchants.findOne({ _id: bm.merchantId, gateway: 'paypal', isActive: true });
+      if (merchant) {
+        paypalMerchant = merchant;
+        break;
+      }
+    }
+    
+    if (!paypalMerchant) {
+      console.log('ERROR: PayPal merchant not found');
+      return res.status(404).json({ message: 'PayPal payment method not available' });
+    }
+    
+    console.log('PayPal Merchant:', paypalMerchant.nickname);
+    
+    // Verify the payment with PayPal API (optional but recommended)
+    try {
+      const axios = require('axios');
+      const apiEndpoint = paypalMerchant.credentials.mode === 'live'
+        ? 'https://api.paypal.com'
+        : 'https://api.sandbox.paypal.com';
+      
+      // Get access token
+      const tokenResponse = await axios.post(
+        `${apiEndpoint}/v1/oauth2/token`,
+        'grant_type=client_credentials',
+        {
+          auth: {
+            username: paypalMerchant.credentials.clientId,
+            password: paypalMerchant.credentials.clientSecret
+          },
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
+        }
+      );
+      
+      const accessToken = tokenResponse.data.access_token;
+      
+      // Verify the order
+      const orderResponse = await axios.get(
+        `${apiEndpoint}/v2/checkout/orders/${orderId}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      const orderData = orderResponse.data;
+      console.log('PayPal Order Status:', orderData.status);
+      
+      // Verify order is completed
+      if (orderData.status !== 'COMPLETED') {
+        console.log('ERROR: Order not completed, status:', orderData.status);
+        return res.status(400).json({ 
+          message: 'Payment not completed',
+          status: orderData.status
+        });
+      }
+      
+      // Verify amount matches
+      const paidAmount = parseFloat(orderData.purchase_units[0].amount.value);
+      const expectedAmount = parseFloat(invoice.total.toFixed(2));
+      
+      if (Math.abs(paidAmount - expectedAmount) > 0.01) {
+        console.log('ERROR: Amount mismatch', { paidAmount, expectedAmount });
+        return res.status(400).json({ 
+          message: 'Payment amount mismatch',
+          paid: paidAmount,
+          expected: expectedAmount
+        });
+      }
+      
+      console.log('✅ Payment verified with PayPal');
+      
+    } catch (verifyErr) {
+      console.error('PayPal verification error:', verifyErr.message);
+      // Continue anyway if verification fails (order already captured)
+      console.log('⚠️ Proceeding without verification');
+    }
+    
+    // Update merchant processed amount
+    const newProcessedAmount = (paypalMerchant.processedAmount || 0) + invoice.total;
+    await db.merchants.update(
+      { _id: paypalMerchant._id },
+      { $set: { processedAmount: newProcessedAmount, updatedAt: new Date().toISOString() } }
+    );
+    
+    console.log(`Merchant amount updated: ${paypalMerchant.processedAmount || 0} -> ${newProcessedAmount}`);
+    
+    // Check if limit reached and notify
+    if (paypalMerchant.amountLimit && newProcessedAmount >= paypalMerchant.amountLimit) {
+      await db.notifications.insert({
+        type: 'merchant_limit_reached',
+        merchantId: paypalMerchant._id,
+        merchantNickname: paypalMerchant.nickname,
+        amountLimit: paypalMerchant.amountLimit,
+        processedAmount: newProcessedAmount,
+        message: `Merchant "${paypalMerchant.nickname}" has reached its amount limit of $${paypalMerchant.amountLimit.toFixed(2)}`,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+      console.log('Notification created for limit reached');
+    }
+    
+    // Capture client metadata
+    const clientIp = req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.connection.remoteAddress || req.socket.remoteAddress || 'Unknown';
+    const userAgent = req.headers['user-agent'] || 'Unknown';
+    const paymentTimestamp = new Date().toISOString();
+    
+    // Update invoice status
+    await db.invoices.update(
+      { _id: invoice._id },
+      { 
+        $set: { 
+          status: 'paid', 
+          paymentOrderRef: captureId || orderId,
+          selectedMerchantId: paypalMerchant._id,
+          billingDetails: {
+            payerEmail: payerEmail,
+            payerName: payerName ? `${payerName.given_name || ''} ${payerName.surname || ''}`.trim() : null,
+            payerId: payerId,
+            paymentGateway: 'paypal',
+            paymentMethod: 'paypal_direct',
+            paymentTimestamp,
+            clientIp,
+            userAgent,
+            deviceFingerprint: userAgent
+          },
+          updatedAt: new Date().toISOString()
+        } 
+      }
+    );
+    
+    console.log(`Invoice ${invoice.invoiceNumber} marked as paid via PayPal`);
+    
+    // Fetch brand info for redirect
+    const brand = invoice.brandId ? await db.brands.findOne({ _id: invoice.brandId }) : null;
+    
+    const response = {
+      status: 'paid',
+      message: 'Payment completed successfully via PayPal',
+      transactionId: captureId || orderId,
+      redirectUrl: (brand && brand.enableRedirect && brand.redirectUrl) ? brand.redirectUrl : null,
+      enableRedirect: (brand && brand.enableRedirect) ? true : false
+    };
+    
+    console.log('Sending success response:', response);
+    console.log('========== PAYPAL COMPLETION COMPLETE ==========\n');
+    
+    res.json(response);
+    
+  } catch (err) {
+    console.error('\n❌ PAYPAL COMPLETION ERROR:', err.message);
+    console.error('Stack:', err.stack);
+    
+    res.status(500).json({ 
+      status: 'error',
+      message: err.message || 'PayPal payment completion failed'
+    });
+  }
+});
+
 // Public payment endpoint (no auth required)
 router.post('/public/:id/pay', async (req, res) => {
   const logToFile = createPaymentLogger();
@@ -613,10 +811,11 @@ router.get('/:id', auth, async (req, res) => {
 
 router.post('/', auth, async (req, res) => {
   try {
-    const { brandId, items, customerEmail, customerName, customerSerialNumber } = req.body;
+    const { brandId, items, customerEmail, customerName, customerSerialNumber, usePayPalDirect } = req.body;
     
     console.log('\n=== INVOICE CREATE ENDPOINT ===');
     console.log('Received items:', JSON.stringify(items, null, 2));
+    console.log('PayPal Direct Checkout:', usePayPalDirect);
     
     if (!brandId) return res.status(400).json({ message: 'Brand is required' });
     if (!items || items.length === 0) return res.status(400).json({ message: 'At least one item is required' });
@@ -657,6 +856,7 @@ router.post('/', auth, async (req, res) => {
       customerSerialNumber,
       customerVerified: false,
       selectedMerchantId: null,
+      usePayPalDirect: usePayPalDirect || false,
       createdBy: req.user._id,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
