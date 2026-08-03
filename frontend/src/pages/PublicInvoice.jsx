@@ -82,37 +82,51 @@ export default function PublicInvoice() {
     const loadPayPalSDK = async () => {
       if (invoice?.usePayPalDirect && !paypalLoaded) {
         try {
+          console.log('🔍 Starting PayPal SDK load...');
+          console.log('Invoice brand ID:', invoice.brandId);
+          console.log('usePayPalDirect:', invoice.usePayPalDirect);
+          
           // Get PayPal merchant for this brand to extract client ID
           const merchantsRes = await api.get(`/merchants/brand/${invoice.brandId}/public`);
-          const paypalMerchant = merchantsRes.data.find(m => m.gateway === 'paypal' && m.isActive);
+          console.log('📦 Merchants response:', merchantsRes.data);
+          
+          const paypalMerchants = merchantsRes.data.filter(m => m.gateway === 'paypal');
+          console.log('🅿️  PayPal merchants found:', paypalMerchants);
+          
+          const paypalMerchant = merchantsRes.data.find(m => m.gateway === 'paypal');
+          console.log('✓ Selected PayPal merchant:', paypalMerchant);
           
           if (!paypalMerchant) {
+            console.error('❌ No PayPal merchant found');
+            console.log('Available merchants:', merchantsRes.data);
             toast.error('PayPal payment method not available');
             return;
           }
           
           // Extract client ID from merchant credentials
+          console.log('🔑 Merchant credentials:', paypalMerchant.credentials);
           const clientId = paypalMerchant.credentials?.clientId;
           const mode = paypalMerchant.credentials?.mode || 'sandbox';
           
           if (!clientId) {
-            console.error('PayPal client ID not configured');
-            toast.error('PayPal configuration error');
+            console.error('❌ PayPal client ID not configured');
+            console.log('Credentials object:', paypalMerchant.credentials);
+            toast.error('PayPal configuration error - missing client ID');
             return;
           }
           
-          console.log('Loading PayPal SDK with client ID:', clientId.substring(0, 10) + '...');
+          console.log('✅ Loading PayPal SDK with client ID:', clientId.substring(0, 10) + '...');
           console.log('Mode:', mode);
           
           const script = document.createElement('script');
           script.src = `https://www.paypal.com/sdk/js?client-id=${clientId}&currency=USD`;
           script.async = true;
           script.onload = () => {
-            console.log('PayPal SDK loaded successfully');
+            console.log('✅ PayPal SDK loaded successfully');
             setPaypalLoaded(true);
           };
           script.onerror = () => {
-            console.error('Failed to load PayPal SDK');
+            console.error('❌ Failed to load PayPal SDK from CDN');
             toast.error('Failed to load PayPal payment system');
           };
           document.body.appendChild(script);
@@ -124,8 +138,9 @@ export default function PublicInvoice() {
             }
           };
         } catch (err) {
-          console.error('Error loading PayPal SDK:', err);
-          toast.error('Failed to initialize PayPal');
+          console.error('❌ Error loading PayPal SDK:', err);
+          console.error('Error details:', err.response?.data || err.message);
+          toast.error('Failed to initialize PayPal: ' + (err.response?.data?.message || err.message));
         }
       }
     };
