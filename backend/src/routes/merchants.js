@@ -138,7 +138,7 @@ router.get('/brand/:brandId/public', async (req, res) => {
         
         // Only include merchants that haven't reached their limit
         if (!limitReached) {
-          merchants.push({
+          const merchantData = {
             _id: merchant._id,
             nickname: merchant.nickname,
             gateway: merchant.gateway,
@@ -146,7 +146,17 @@ router.get('/brand/:brandId/public', async (req, res) => {
             ticketSize: merchant.ticketSize || null,
             // Include tokenization key for frontend (safe to expose - it's public)
             tokenizationKey: merchant.credentials?.tokenizationKey || null,
-          });
+          };
+          
+          // For PayPal, include credentials (clientId is safe to expose - it's public)
+          if (merchant.gateway === 'paypal') {
+            merchantData.credentials = {
+              clientId: merchant.credentials?.clientId || null,
+              mode: merchant.credentials?.mode || 'sandbox'
+            };
+          }
+          
+          merchants.push(merchantData);
         }
       }
     }
