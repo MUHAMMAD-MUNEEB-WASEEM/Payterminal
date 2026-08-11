@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import api from '../api/axios';
 import toast from 'react-hot-toast';
 import {
-  LayoutDashboard, Building2, FileText, Users, LogOut, Menu, X, ChevronRight, CreditCard, Bell
+  LayoutDashboard, Building2, FileText, Users, LogOut, Menu, X, ChevronRight, CreditCard, Bell, Shield
 } from 'lucide-react';
 
 const navItems = [
@@ -13,16 +13,36 @@ const navItems = [
   { path: '/brands', label: 'Brands', icon: Building2, adminOnly: true },
   { path: '/merchants', label: 'Merchants', icon: CreditCard, adminOnly: true },
   { path: '/users', label: 'Users', icon: Users, adminOnly: true },
+  { path: '/superadmin', label: 'Super Admin', icon: Shield, superAdminOnly: true },
 ];
 
 export default function Layout({ children }) {
-  const { user, logout } = useAuth();
+  const { user, logout, maintenanceMode } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+
+  // Show 404 maintenance page if maintenance mode is ON and user is not superadmin
+  if (maintenanceMode && user?.role !== 'superadmin') {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="text-center">
+          <h1 className="text-9xl font-bold text-gray-300 mb-4">404</h1>
+          <h2 className="text-3xl font-bold text-gray-900 mb-2">Page Not Found</h2>
+          <p className="text-gray-600 mb-8">The page you're looking for doesn't exist or has been moved.</p>
+          <button
+            onClick={logout}
+            className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+          >
+            Go Back to Login
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   useEffect(() => {
     if (user?.role === 'admin' || user?.role === 'compliance') {
@@ -80,7 +100,11 @@ export default function Layout({ children }) {
     navigate('/login');
   };
 
-  const filteredNav = navItems.filter(item => !item.adminOnly || user?.role === 'admin' || user?.role === 'compliance');
+  const filteredNav = navItems.filter(item => {
+    if (item.superAdminOnly) return user?.role === 'superadmin';
+    if (item.adminOnly) return ['admin', 'compliance', 'superadmin'].includes(user?.role);
+    return true;
+  });
 
   return (
     <div className="flex h-screen bg-gray-50">

@@ -10,14 +10,16 @@ import Brands from './pages/Brands';
 import Invoices from './pages/Invoices';
 import Users from './pages/Users';
 import Merchants from './pages/Merchants';
+import SuperAdmin from './pages/SuperAdmin';
 import PublicInvoice from './pages/PublicInvoice';
 import PaymentSuccess from './pages/PaymentSuccess';
 
-function PrivateRoute({ children, adminOnly = false, adminOrCompliance = false }) {
+function PrivateRoute({ children, adminOnly = false, adminOrCompliance = false, superAdminOnly = false }) {
   const { user } = useAuth();
   if (!user) return <Navigate to="/login" replace />;
-  if (adminOnly && user.role !== 'admin') return <Navigate to="/dashboard" replace />;
-  if (adminOrCompliance && user.role !== 'admin' && user.role !== 'compliance') return <Navigate to="/dashboard" replace />;
+  if (superAdminOnly && user.role !== 'superadmin') return <Navigate to="/dashboard" replace />;
+  if (adminOnly && user.role !== 'admin' && user.role !== 'superadmin') return <Navigate to="/dashboard" replace />;
+  if (adminOrCompliance && !['admin', 'compliance', 'superadmin'].includes(user.role)) return <Navigate to="/dashboard" replace />;
   return <Layout>{children}</Layout>;
 }
 
@@ -39,6 +41,9 @@ function AppRoutes() {
       <Route path="/pay/:invoiceId" element={<PublicInvoice />} />
       <Route path="/dashboard" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
       <Route path="/invoices" element={<PrivateRoute><Invoices /></PrivateRoute>} />
+      
+      {/* Super Admin only routes */}
+      <Route path="/superadmin" element={<PrivateRoute superAdminOnly><SuperAdmin /></PrivateRoute>} />
       
       {/* Admin or Compliance routes */}
       <Route path="/brands" element={<PrivateRoute adminOrCompliance><Brands /></PrivateRoute>} />

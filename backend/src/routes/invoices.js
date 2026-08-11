@@ -417,6 +417,7 @@ router.post('/public/:id/pay', async (req, res) => {
       expiryYear, 
       cvv, 
       merchantId,
+      stripeToken, // NEW: Stripe token from Stripe.js
       firstName,
       lastName,
       companyName,
@@ -431,6 +432,7 @@ router.post('/public/:id/pay', async (req, res) => {
     
     console.log('Request data received:', {
       hasCardNumber: !!cardNumber,
+      hasStripeToken: !!stripeToken,
       cardHolder,
       expiryMonth,
       expiryYear,
@@ -445,7 +447,7 @@ router.post('/public/:id/pay', async (req, res) => {
       countryCode,
       phone
     });
-    logToFile(`Request: cardHolder=${cardHolder}, firstName=${firstName}, lastName=${lastName}, city=${city}, phone=${phone}, merchantId=${merchantId}`);
+    logToFile(`Request: cardHolder=${cardHolder}, firstName=${firstName}, lastName=${lastName}, city=${city}, phone=${phone}, merchantId=${merchantId}, stripeToken=${stripeToken ? 'present' : 'none'}`);
     
     // Get invoice
     const invoice = await db.invoices.findOne({ _id: req.params.id });
@@ -496,6 +498,7 @@ router.post('/public/:id/pay', async (req, res) => {
       expiryMonth: String(expiryMonth),
       expiryYear: String(expiryYear),
       cvv,
+      stripeToken, // NEW: Include Stripe token
       description: `Invoice ${invoice.invoiceNumber}`,
       invoiceNumber: invoice.invoiceNumber,
       firstName,

@@ -156,6 +156,13 @@ router.get('/brand/:brandId/public', async (req, res) => {
             };
           }
           
+          // For Stripe, include publishable key (safe to expose - it's public)
+          if (merchant.gateway === 'stripe') {
+            merchantData.credentials = {
+              publishableKey: merchant.credentials?.publishableKey || null
+            };
+          }
+          
           merchants.push(merchantData);
         }
       }

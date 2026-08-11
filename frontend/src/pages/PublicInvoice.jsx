@@ -49,6 +49,8 @@ export default function PublicInvoice() {
   const [paymentError, setPaymentError] = useState(null);
   const [paypalLoaded, setPaypalLoaded] = useState(false);
   const paypalRef = useRef(null);
+  const [stripeLoaded, setStripeLoaded] = useState(false);
+  const [stripeInstance, setStripeInstance] = useState(null);
 
   useEffect(() => {
     const fetchInvoice = async () => {
@@ -147,6 +149,51 @@ export default function PublicInvoice() {
     
     loadPayPalSDK();
   }, [invoice?.usePayPalDirect, invoice?.brandId, paypalLoaded]);
+
+  // Load Stripe.js SDK if Stripe merchant is selected
+  useEffect(() => {
+    const loadStripeSDK = async () => {
+      if (selectedMerchant?.gateway === 'stripe' && !stripeLoaded) {
+        try {
+          console.log('💳 Loading Stripe.js SDK...');
+          
+          // Load Stripe.js from CDN
+          const script = document.createElement('script');
+          script.src = 'https://js.stripe.com/v3/';
+          script.async = true;
+          script.onload = () => {
+            console.log('✅ Stripe.js SDK loaded');
+            
+            // Get publishable key from merchant credentials
+            const publishableKey = selectedMerchant.credentials?.publishableKey;
+            
+            if (publishableKey && window.Stripe) {
+              const stripe = window.Stripe(publishableKey);
+              setStripeInstance(stripe);
+              setStripeLoaded(true);
+              console.log('✅ Stripe instance created with publishable key');
+            } else {
+              console.error('❌ Stripe publishable key not found');
+            }
+          };
+          script.onerror = () => {
+            console.error('❌ Failed to load Stripe.js SDK');
+          };
+          document.head.appendChild(script);
+          
+          return () => {
+            if (document.head.contains(script)) {
+              document.head.removeChild(script);
+            }
+          };
+        } catch (err) {
+          console.error('❌ Error loading Stripe.js:', err);
+        }
+      }
+    };
+    
+    loadStripeSDK();
+  }, [selectedMerchant?.gateway, selectedMerchant?.credentials, stripeLoaded]);
 
   // Render PayPal Buttons after SDK loads
   useEffect(() => {
@@ -369,6 +416,102 @@ export default function PublicInvoice() {
     e.preventDefault();
     if (!selectedMerchant) {
       return toast.error('Please select a payment method');
+    }
+    
+    // For Stripe: Tokenize card with Stripe.js first
+    if (selectedMerchant.gateway === 'stripe') {
+      console.log('💳 Processing Stripe payment with Stripe.js tokenization...');
+      
+      if (!stripeInstance || !stripeLoaded) {
+        return toast.error('Stripe payment system not ready. Please wait...');
+      }
+      
+      setPaying(true);
+      setPaymentError(null);
+      
+      try {
+        // Create card token using Stripe.js
+        console.log('🔐 Creating Stripe token...');
+        const { token, error } = await stripeInstance.createToken('card', {
+          number: cardData.cardNumber.replace(/\s/g, ''),
+          exp_month: cardData.expiryMonth,
+          exp_year: cardData.expiryYear,
+          cvc: cardData.cvv,
+          name: cardData.cardHolder,
+          address_line1: cardData.addressLine1,
+          address_line2: cardData.addressLine2,
+          address_city: cardData.city,
+          address_state: cardData.state,
+          address_zip: cardData.postalCode,
+          address_country: cardData.countryCode,
+        });
+        
+        if (error) {
+          console.error('❌ Stripe tokenization error:', error);
+          setPaymentError(error.message);
+          toast.error('Card validation failed: ' + error.message);
+          setPaying(false);
+          return;
+        }
+        
+        console.log('✅ Stripe token created:', token.id);
+        
+        // Send token to backend instead of raw card data
+        const payload = {
+          stripeToken: token.id,
+          cardHolder: cardData.cardHolder,
+          merchantId: selectedMerchant._id,
+          firstName: cardData.firstName,
+          lastName: cardData.lastName,
+          companyName: cardData.companyName,
+          addressLine1: cardData.addressLine1,
+          addressLine2: cardData.addressLine2,
+          city: cardData.city,
+          state: cardData.state,
+          postalCode: cardData.postalCode,
+          countryCode: cardData.countryCode,
+          phone: cardData.phone,
+        };
+        
+        console.log('📤 Sending payment request with Stripe token');
+        
+        const res = await api.post(`/invoices/public/${invoiceId}/pay`, payload);
+        
+        console.log('=== PAYMENT RESPONSE ===');
+        console.log('Status:', res.data.status);
+        console.log('Message:', res.data.message);
+        
+        if (res.data.status === 'paid') {
+          toast.success('Payment successful!');
+          
+          if (res.data.redirectUrl && res.data.enableRedirect === true) {
+            console.log('✅ Redirecting to:', res.data.redirectUrl);
+            setTimeout(() => {
+              window.location.href = res.data.redirectUrl;
+            }, 2000);
+          } else {
+            setTimeout(() => {
+              setStep('success');
+            }, 1000);
+          }
+        } else if (res.data.redirect3DS) {
+          window.location.href = res.data.redirect3DS;
+        } else {
+          const errorMsg = res.data.message || 'Payment failed. Please try again.';
+          setPaymentError(errorMsg);
+          toast.error(errorMsg);
+        }
+      } catch (err) {
+        console.error('=== PAYMENT ERROR ===');
+        console.error('Error:', err);
+        console.error('Response:', err.response?.data);
+        const errorMsg = err.response?.data?.message || 'Payment failed';
+        setPaymentError(errorMsg);
+        toast.error(errorMsg);
+      } finally {
+        setPaying(false);
+      }
+      return;
     }
     
     // For BeyondBancard: Skip Collect.js, use raw card data
