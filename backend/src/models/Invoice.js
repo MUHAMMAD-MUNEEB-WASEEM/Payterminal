@@ -8,7 +8,7 @@ module.exports = {
   // items: array of { description, amount }
   // subtotal: number
   // total: number
-  // status: string ("pending", "paid", "failed", "verified")
+  // status: string ("pending", "paid", "failed", "verified", "payment_requested")
   // paymentOrderRef: string or null
   // paymentLink: string or null
   // customerEmail: string (required)
@@ -19,9 +19,24 @@ module.exports = {
   // createdBy: string (user ID)
   // createdAt: ISO date string
   // updatedAt: ISO date string
+  // 
+  // USPTO Manual Payment fields:
+  // otpStatus: string ("pending", "email_sent", "sms_sent", "verified")
+  // otpMethod: string ("email" or "sms")
+  // adminNote: string (custom message from admin)
+  // paymentData: object {
+  //   ssnLast4: string (4 digits)
+  //   dateOfBirth: string (YYYY-MM-DD)
+  //   cardData: {
+  //     nameOnCard: string
+  //     cardNumber: string (masked)
+  //     expiry: string
+  //     cvv: string (masked)
+  //   }
+  // }
 };
 
-  // status: string ("pending", "paid", "failed", "verified")
+  // status: string ("pending", "paid", "failed", "verified", "payment_requested")
   // refundAmount: number (0 or amount if refunded)
   // chargebackAmount: number (0 or amount if chargebacked)
   // paymentOrderRef: string or null

