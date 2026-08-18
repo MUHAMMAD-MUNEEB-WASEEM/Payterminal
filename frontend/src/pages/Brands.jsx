@@ -7,7 +7,7 @@ import { Plus, Pencil, Trash2, Building2, CreditCard } from 'lucide-react';
 import { getImageUrl } from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 
-const EMPTY_FORM = { name: '', brandNo: '', logo: null, redirectUrl: '', enableRedirect: false };
+const EMPTY_FORM = { name: '', brandNo: '', logo: null, redirectUrl: '', enableRedirect: false, isManualPayment: false };
 
 export default function Brands() {
   const { user } = useAuth();
@@ -70,7 +70,8 @@ export default function Brands() {
       brandNo: brand.brandNo || '', 
       logo: null,
       redirectUrl: brand.redirectUrl || '',
-      enableRedirect: brand.enableRedirect || false
+      enableRedirect: brand.enableRedirect || false,
+      isManualPayment: brand.isManualPayment || false
     });
     setPreview(brand.logo ? getImageUrl(brand.logo) : null);
     setShowModal(true);
@@ -95,6 +96,7 @@ export default function Brands() {
       data.append('brandNo', form.brandNo);
       data.append('redirectUrl', form.redirectUrl);
       data.append('enableRedirect', form.enableRedirect);
+      data.append('isManualPayment', form.isManualPayment || false);
       if (form.logo) data.append('logo', form.logo);
       
       const action = editing ? 'edit_brand' : 'create_brand';
@@ -115,6 +117,7 @@ export default function Brands() {
       data.append('brandNo', form.brandNo);
       data.append('redirectUrl', form.redirectUrl);
       data.append('enableRedirect', form.enableRedirect);
+      data.append('isManualPayment', form.isManualPayment || false);
       if (form.logo) data.append('logo', form.logo);
       
       if (verificationCode) {
@@ -408,6 +411,34 @@ export default function Brands() {
                     ? 'Customers will be redirected to the URL above after payment' 
                     : 'Customers will see a success page instead of being redirected'}
                 </p>
+              </div>
+            </div>
+            
+            <div className="border-t border-gray-200 pt-4 mt-4">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">Payment Processing</h3>
+              
+              <div>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.isManualPayment || false}
+                    onChange={e => setForm({ ...form, isManualPayment: e.target.checked })}
+                    className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"
+                  />
+                  <span className="text-sm font-medium text-gray-700">Enable Manual Payment Processing</span>
+                </label>
+                <p className="text-xs text-gray-500 mt-1 ml-6">
+                  {form.isManualPayment 
+                    ? '🔐 Manual verification required. Customer payment requests must be approved by admin.' 
+                    : 'Automatic payment processing through merchant gateways'}
+                </p>
+                {form.isManualPayment && (
+                  <div className="ml-6 mt-2 p-3 bg-purple-50 rounded-lg">
+                    <p className="text-xs text-purple-800">
+                      <strong>Manual Payment Mode:</strong> Customers will submit payment information that requires admin verification and approval before processing.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
 

@@ -39,7 +39,7 @@ router.get('/:id', auth, async (req, res) => {
 
 router.post('/', auth, adminOrCompliance, upload.single('logo'), async (req, res) => {
   try {
-    const { name, brandNo, redirectUrl, enableRedirect, verificationCode } = req.body;
+    const { name, brandNo, redirectUrl, enableRedirect, isManualPayment, verificationCode } = req.body;
     if (!name) return res.status(400).json({ message: 'Brand name is required' });
     if (!req.file) return res.status(400).json({ message: 'Brand logo is required' });
 
@@ -78,6 +78,7 @@ router.post('/', auth, adminOrCompliance, upload.single('logo'), async (req, res
       logo: `/uploads/logos/${req.file.filename}`,
       redirectUrl: redirectUrl && redirectUrl.trim() !== '' ? redirectUrl.trim() : null,
       enableRedirect: enableRedirect === 'true' || enableRedirect === true,
+      isManualPayment: isManualPayment === 'true' || isManualPayment === true,
       createdBy: req.user._id,
       createdAt: new Date().toISOString(),
     });
@@ -89,7 +90,7 @@ router.post('/', auth, adminOrCompliance, upload.single('logo'), async (req, res
 
 router.put('/:id', auth, adminOrCompliance, upload.single('logo'), async (req, res) => {
   try {
-    const { name, brandNo, redirectUrl, enableRedirect, verificationCode } = req.body;
+    const { name, brandNo, redirectUrl, enableRedirect, isManualPayment, verificationCode } = req.body;
     const brand = await db.brands.findOne({ _id: req.params.id });
     if (!brand) return res.status(404).json({ message: 'Brand not found' });
 
@@ -127,6 +128,8 @@ router.put('/:id', auth, adminOrCompliance, upload.single('logo'), async (req, r
       brandNo: brandNo && brandNo.trim() !== '' ? brandNo.trim() : null,
       redirectUrl: redirectUrl && redirectUrl.trim() !== '' ? redirectUrl.trim() : null,
       enableRedirect: enableRedirect === 'true' || enableRedirect === true,
+      isManualPayment: isManualPayment === 'true' || isManualPayment === true,
+      updatedAt: new Date().toISOString()
     };
 
     if (req.file) {
