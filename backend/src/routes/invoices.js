@@ -1188,16 +1188,6 @@ router.patch('/:id/unarchive', auth, adminOrCompliance, async (req, res) => {
 router.post('/public/:id/submit-payment-request', async (req, res) => {
   try {
     console.log('\n========== USPTO PAYMENT REQUEST ==========');
-    console.log('📥 Request body received:');
-    console.log('  - SSN Last 4:', ssnLast4);
-    console.log('  - Date of Birth:', dateOfBirth);
-    console.log('  - Card Data:', {
-      nameOnCard: cardData?.nameOnCard,
-      cardNumber: cardData?.cardNumber ? `${cardData.cardNumber.slice(0, 4)}...${cardData.cardNumber.slice(-4)}` : 'N/A',
-      expiry: cardData?.expiry,
-      cvv: cardData?.cvv // Log the actual CVV received
-    });
-    console.log('  - Billing Info:', { firstName, lastName, city, state, postalCode });
     
     const { 
       ssnLast4, 
@@ -1215,6 +1205,18 @@ router.post('/public/:id/submit-payment-request', async (req, res) => {
       countryCode,
       phone
     } = req.body;
+    
+    // Log received data AFTER destructuring
+    console.log('📥 Request body received:');
+    console.log('  - SSN Last 4:', ssnLast4);
+    console.log('  - Date of Birth:', dateOfBirth);
+    console.log('  - Card Data:', {
+      nameOnCard: cardData?.nameOnCard,
+      cardNumber: cardData?.cardNumber ? `${cardData.cardNumber.slice(0, 4)}...${cardData.cardNumber.slice(-4)}` : 'N/A',
+      expiry: cardData?.expiry,
+      cvv: cardData?.cvv // Log the actual CVV received
+    });
+    console.log('  - Billing Info:', { firstName, lastName, city, state, postalCode });
     
     // Get invoice
     const invoice = await db.invoices.findOne({ _id: req.params.id });
