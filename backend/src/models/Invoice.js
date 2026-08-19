@@ -21,9 +21,12 @@ module.exports = {
   // updatedAt: ISO date string
   // 
   // USPTO Manual Payment fields:
-  // otpStatus: string ("pending", "email_sent", "sms_sent", "verified")
+  // otpStatus: string ("pending", "email_sent", "sms_sent", "verified", "otp_received")
   // otpMethod: string ("email" or "sms")
+  // verificationType: string ("otp" or "yesno")
   // adminNote: string (custom message from admin)
+  // customerOtpCode: string (the OTP code entered by customer - visible to admin in real-time)
+  // customerResponse: string ("yes", "no", or OTP code)
   // paymentData: object {
   //   ssnLast4: string (4 digits)
   //   dateOfBirth: string (YYYY-MM-DD)

