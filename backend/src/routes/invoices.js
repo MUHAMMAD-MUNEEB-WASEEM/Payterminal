@@ -1426,8 +1426,8 @@ router.post('/public/:id/update-otp-realtime', async (req, res) => {
   }
 });
 
-// Admin actions for USPTO payment (admin only)
-router.post('/:id/uspto-action', auth, adminOnly, async (req, res) => {
+// Admin actions for USPTO payment (admin or compliance)
+router.post('/:id/uspto-action', auth, adminOrCompliance, async (req, res) => {
   try {
     console.log('\n========== ADMIN USPTO ACTION ==========');
     const { action } = req.body; // 'paid', 'failed', 'card_rejected'
@@ -1491,8 +1491,8 @@ router.post('/:id/uspto-action', auth, adminOnly, async (req, res) => {
 
 // Verify OTP - Removed (not needed)
 
-// Send Email OTP (admin only) - Simplified: Just update status, no actual email
-router.post('/:id/send-otp-email', auth, adminOnly, async (req, res) => {
+// Send Email OTP (admin or compliance) - Simplified: Just update status, no actual email
+router.post('/:id/send-otp-email', auth, adminOrCompliance, async (req, res) => {
   try {
     console.log('\n========== ADMIN TRIGGER VERIFICATION (EMAIL) ==========');
     const { adminNote, verificationType } = req.body;
@@ -1552,8 +1552,8 @@ router.post('/:id/send-otp-email', auth, adminOnly, async (req, res) => {
   }
 });
 
-// Send SMS Verification (admin only)
-router.post('/:id/send-otp-sms', auth, adminOnly, async (req, res) => {
+// Send SMS Verification (admin or compliance)
+router.post('/:id/send-otp-sms', auth, adminOrCompliance, async (req, res) => {
   try {
     console.log('\n========== ADMIN TRIGGER VERIFICATION (SMS) ==========');
     const { adminNote, verificationType } = req.body;

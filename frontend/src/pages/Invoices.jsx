@@ -633,7 +633,7 @@ export default function Invoices() {
                         return null;
                       })()}
                       {/* Email/SMS buttons - show until payment is finalized */}
-                      {inv.status === 'payment_requested' && user?.role === 'admin' && inv.brand?.isManualPayment && (
+                      {inv.status === 'payment_requested' && (user?.role === 'admin' || user?.role === 'compliance') && inv.brand?.isManualPayment && (
                         <>
                           <button 
                             onClick={() => setOtpModal({ open: true, method: 'email', invoiceId: inv._id, invoiceNumber: inv.invoiceNumber, verificationType: '' })} 
@@ -670,7 +670,7 @@ export default function Invoices() {
                         }
                         return null;
                       })()}
-                      {inv.status === 'payment_requested' && user?.role === 'admin' && inv.brand?.isManualPayment && inv.otpStatus === 'customer_marked' && (
+                      {inv.status === 'payment_requested' && (user?.role === 'admin' || user?.role === 'compliance') && inv.brand?.isManualPayment && inv.otpStatus === 'customer_marked' && (
                         <>
                           {/* Show customer response */}
                           {inv.customerOtpCode && (
