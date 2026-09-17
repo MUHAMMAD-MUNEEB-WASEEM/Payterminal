@@ -42,7 +42,7 @@ function buildBillingDetails(req, body, gateway) {
     countryCode: body.countryCode,
     phone: body.phone,
     cardholderName: cardHolder,
-    cardLast4: cardNumber ? cardNumber.slice(-4) : null,
+    cardLast4: cardNumber ? cardNumber.slice(-4) : (body.cardLast4 || null), // Stripe Elements sends only the last 4
     cardExpiry: expiryMonth && expiryYear ? `${expiryMonth}/${expiryYear}` : null,
     paymentGateway: gateway,
     // Payment metadata

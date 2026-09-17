@@ -62,6 +62,9 @@ export default function PublicInvoice() {
   const paypalRef = useRef(null);
   const [stripeLoaded, setStripeLoaded] = useState(false);
   const [stripeInstance, setStripeInstance] = useState(null);
+  const stripeCardHostRef = useRef(null); // the div Stripe mounts its field into
+  const stripeCardRef = useRef(null); // the mounted Stripe card Element
+  const [stripeCardError, setStripeCardError] = useState(null);
 
   useEffect(() => {
     const fetchInvoice = async () => {
@@ -439,6 +442,36 @@ export default function PublicInvoice() {
     };
   }, [selectedMerchant, stripeLoaded]);
 
+  // Mount Stripe's card field. Stripe.js v3 will only tokenize card details
+  // typed into its own Element, so the card number, expiry and CVC live here
+  // instead of in our inputs whenever Stripe is the selected gateway.
+  useEffect(() => {
+    if (!stripeInstance || step !== 'payment' || selectedMerchant?.gateway !== 'stripe') return;
+    if (!stripeCardHostRef.current || stripeCardRef.current) return;
+
+    const elements = stripeInstance.elements();
+    const card = elements.create('card', {
+      hidePostalCode: true, // the billing section already asks for it
+      style: {
+        base: {
+          fontSize: '16px',
+          color: '#1f2937',
+          fontFamily: 'system-ui, -apple-system, sans-serif',
+          '::placeholder': { color: '#9ca3af' },
+        },
+        invalid: { color: '#dc2626', iconColor: '#dc2626' },
+      },
+    });
+    card.mount(stripeCardHostRef.current);
+    card.on('change', (event) => setStripeCardError(event.error ? event.error.message : null));
+    stripeCardRef.current = card;
+
+    return () => {
+      card.unmount();
+      stripeCardRef.current = null;
+    };
+  }, [stripeInstance, step, selectedMerchant]);
+
   // Render PayPal Buttons after SDK loads
   useEffect(() => {
     if (paypalLoaded && window.paypal && paypalRef.current && invoice?.usePayPalDirect) {
@@ -809,7 +842,7 @@ export default function PublicInvoice() {
     if (selectedMerchant.gateway === 'stripe') {
       console.log('💳 Processing Stripe payment with Stripe.js tokenization...');
       
-      if (!stripeInstance || !stripeLoaded) {
+      if (!stripeInstance || !stripeLoaded || !stripeCardRef.current) {
         return toast.error(paymentError || 'The secure payment system is still loading. Please wait a moment and try again.');
       }
       
@@ -819,11 +852,8 @@ export default function PublicInvoice() {
       try {
         // Create card token using Stripe.js
         console.log('🔐 Creating Stripe token...');
-        const { token, error } = await stripeInstance.createToken('card', {
-          number: cardData.cardNumber.replace(/\s/g, ''),
-          exp_month: cardData.expiryMonth,
-          exp_year: cardData.expiryYear,
-          cvc: cardData.cvv,
+        // Stripe only accepts card data collected by its own Element
+        const { token, error } = await stripeInstance.createToken(stripeCardRef.current, {
           name: cardData.cardHolder,
           address_line1: cardData.addressLine1,
           address_line2: cardData.addressLine2,
@@ -846,6 +876,7 @@ export default function PublicInvoice() {
         // Send token to backend instead of raw card data
         const payload = {
           stripeToken: token.id,
+          cardLast4: token.card?.last4 || null,
           cardHolder: cardData.cardHolder,
           merchantId: selectedMerchant._id,
           firstName: cardData.firstName,
@@ -1810,62 +1841,80 @@ export default function PublicInvoice() {
                       />
                     </div>
 
-                    <div className="mb-4">
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Card Number *</label>
-                      <input
-                        type="text"
-                        required
-                        value={cardData.cardNumber}
-                        onChange={(e) => handleCardChange('cardNumber', e.target.value)}
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        placeholder="1234 5678 9012 3456"
-                        maxLength="19"
-                      />
-                      <div className="flex gap-4 mt-3">
-                        <img src="https://cdn.worldvectorlogo.com/logos/visa-4.svg" alt="Visa" className="h-8 w-auto" />
-                        <img src="https://cdn.worldvectorlogo.com/logos/mastercard-6.svg" alt="Mastercard" className="h-8 w-auto" />
-                        <img src="https://cdn.worldvectorlogo.com/logos/american-express-3.svg" alt="Amex" className="h-8 w-auto" />
+                    {selectedMerchant?.gateway === 'stripe' ? (
+                      <div className="mb-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Card Number, Expiry and CVC *</label>
+                        <div ref={stripeCardHostRef} className="w-full px-4 py-3.5 border border-gray-300 rounded-lg bg-white" />
+                        {stripeCardError && (
+                          <p className="text-sm text-red-600 mt-2">{stripeCardError}</p>
+                        )}
+                        <div className="flex gap-4 mt-3">
+                          <img src="https://cdn.worldvectorlogo.com/logos/visa-4.svg" alt="Visa" className="h-8 w-auto" />
+                          <img src="https://cdn.worldvectorlogo.com/logos/mastercard-6.svg" alt="Mastercard" className="h-8 w-auto" />
+                          <img src="https://cdn.worldvectorlogo.com/logos/american-express-3.svg" alt="Amex" className="h-8 w-auto" />
+                        </div>
+                        <p className="text-xs text-gray-500 mt-2">Entered directly into Stripe's secure fields.</p>
                       </div>
-                    </div>
+                    ) : (
+                      <>
+                      <div className="mb-4">
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Card Number *</label>
+                        <input
+                          type="text"
+                          required
+                          value={cardData.cardNumber}
+                          onChange={(e) => handleCardChange('cardNumber', e.target.value)}
+                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          placeholder="1234 5678 9012 3456"
+                          maxLength="19"
+                        />
+                        <div className="flex gap-4 mt-3">
+                          <img src="https://cdn.worldvectorlogo.com/logos/visa-4.svg" alt="Visa" className="h-8 w-auto" />
+                          <img src="https://cdn.worldvectorlogo.com/logos/mastercard-6.svg" alt="Mastercard" className="h-8 w-auto" />
+                          <img src="https://cdn.worldvectorlogo.com/logos/american-express-3.svg" alt="Amex" className="h-8 w-auto" />
+                        </div>
+                      </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Expiration Date *</label>
-                        <div className="flex gap-2">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Expiration Date *</label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              required
+                              value={cardData.expiryMonth}
+                              onChange={(e) => handleCardChange('expiryMonth', e.target.value)}
+                              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              placeholder="MM"
+                              maxLength="2"
+                            />
+                            <input
+                              type="text"
+                              required
+                              value={cardData.expiryYear}
+                              onChange={(e) => handleCardChange('expiryYear', e.target.value)}
+                              className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              placeholder="YYYY"
+                              maxLength="4"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">CVV *</label>
                           <input
                             type="text"
                             required
-                            value={cardData.expiryMonth}
-                            onChange={(e) => handleCardChange('expiryMonth', e.target.value)}
+                            value={cardData.cvv}
+                            onChange={(e) => handleCardChange('cvv', e.target.value)}
                             className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="MM"
-                            maxLength="2"
-                          />
-                          <input
-                            type="text"
-                            required
-                            value={cardData.expiryYear}
-                            onChange={(e) => handleCardChange('expiryYear', e.target.value)}
-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                            placeholder="YYYY"
+                            placeholder="123"
                             maxLength="4"
                           />
                         </div>
                       </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">CVV *</label>
-                        <input
-                          type="text"
-                          required
-                          value={cardData.cvv}
-                          onChange={(e) => handleCardChange('cvv', e.target.value)}
-                          className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          placeholder="123"
-                          maxLength="4"
-                        />
-                      </div>
-                    </div>
+                      </>
+                    )}
                   </div>
 
                   <button
