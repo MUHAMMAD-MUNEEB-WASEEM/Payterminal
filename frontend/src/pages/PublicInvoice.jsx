@@ -384,50 +384,60 @@ export default function PublicInvoice() {
     }
   }, [step, isUSPTOBrand, invoiceId]);
 
-  // Load Stripe.js SDK if Stripe merchant is selected
+  // Load Stripe.js when a Stripe merchant is selected
   useEffect(() => {
-    const loadStripeSDK = async () => {
-      if (selectedMerchant?.gateway === 'stripe' && !stripeLoaded) {
-        try {
-          console.log('💳 Loading Stripe.js SDK...');
-          
-          // Load Stripe.js from CDN
-          const script = document.createElement('script');
-          script.src = 'https://js.stripe.com/v3/';
-          script.async = true;
-          script.onload = () => {
-            console.log('✅ Stripe.js SDK loaded');
-            
-            // Get publishable key from merchant credentials
-            const publishableKey = selectedMerchant.credentials?.publishableKey;
-            
-            if (publishableKey && window.Stripe) {
-              const stripe = window.Stripe(publishableKey);
-              setStripeInstance(stripe);
-              setStripeLoaded(true);
-              console.log('✅ Stripe instance created with publishable key');
-            } else {
-              console.error('❌ Stripe publishable key not found');
-            }
-          };
-          script.onerror = () => {
-            console.error('❌ Failed to load Stripe.js SDK');
-          };
-          document.head.appendChild(script);
-          
-          return () => {
-            if (document.head.contains(script)) {
-              document.head.removeChild(script);
-            }
-          };
-        } catch (err) {
-          console.error('❌ Error loading Stripe.js:', err);
-        }
+    if (selectedMerchant?.gateway !== 'stripe' || stripeLoaded) return;
+
+    const publishableKey = selectedMerchant.credentials?.publishableKey;
+    if (!publishableKey) {
+      console.error('❌ No Stripe publishable key configured for', selectedMerchant.nickname);
+      setPaymentError('This payment method is not set up correctly. Please choose another payment method or contact support.');
+      return;
+    }
+
+    // Stripe() throws on a key that is not a real publishable key, and this runs
+    // in a script callback, so without the catch the page would sit on
+    // "not ready" with nothing to explain why.
+    const createInstance = () => {
+      try {
+        setStripeInstance(window.Stripe(publishableKey));
+        setStripeLoaded(true);
+        setPaymentError(null);
+        console.log('✅ Stripe ready');
+      } catch (err) {
+        console.error('❌ Stripe rejected the publishable key:', err.message);
+        setPaymentError('This payment method is not set up correctly. Please choose another payment method or contact support.');
       }
     };
-    
-    loadStripeSDK();
-  }, [selectedMerchant?.gateway, selectedMerchant?.credentials, stripeLoaded]);
+
+    // Another render may already have loaded the script
+    if (window.Stripe) {
+      createInstance();
+      return;
+    }
+
+    const existing = document.querySelector('script[src="https://js.stripe.com/v3/"]');
+    const script = existing || document.createElement('script');
+    const handleLoad = () => createInstance();
+    const handleError = () => {
+      console.error('❌ Could not load Stripe.js');
+      setPaymentError('Could not load the secure payment system. Check your connection or any ad blocker, then reload this page.');
+    };
+
+    script.addEventListener('load', handleLoad);
+    script.addEventListener('error', handleError);
+
+    if (!existing) {
+      script.src = 'https://js.stripe.com/v3/';
+      script.async = true;
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      script.removeEventListener('load', handleLoad);
+      script.removeEventListener('error', handleError);
+    };
+  }, [selectedMerchant, stripeLoaded]);
 
   // Render PayPal Buttons after SDK loads
   useEffect(() => {
@@ -800,7 +810,7 @@ export default function PublicInvoice() {
       console.log('💳 Processing Stripe payment with Stripe.js tokenization...');
       
       if (!stripeInstance || !stripeLoaded) {
-        return toast.error('Stripe payment system not ready. Please wait...');
+        return toast.error(paymentError || 'The secure payment system is still loading. Please wait a moment and try again.');
       }
       
       setPaying(true);
