@@ -4,20 +4,20 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const db = require('../db');
 const { auth, adminOnly } = require('../middleware/auth');
+const SUPER_ADMIN = require('../config/superAdmin');
+const { loginRateLimit } = require('../middleware/rateLimit');
+const { invalidate: invalidateMaintenance } = require('../middleware/maintenance');
 
-// Super admin credentials (hardcoded for security - not in database)
-const SUPER_ADMIN = {
-  username: 'superadmin',
-  password: 'abcd1234', // Plain text - will be checked directly
-  role: 'superadmin'
-};
+// The super admin lives outside the database. Its password now comes from
+// SUPER_ADMIN_PASSWORD — see src/config/superAdmin.js for why, and for the
+// fallback that stops this change locking anyone out.
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginRateLimit, async (req, res) => {
   try {
     const { username, password } = req.body;
     
     // Check for super admin first (hidden, not in database)
-    if (username === SUPER_ADMIN.username && password === SUPER_ADMIN.password) {
+    if (SUPER_ADMIN.matches(username, password)) {
       const token = jwt.sign(
         { 
           id: 'superadmin',
@@ -144,6 +144,10 @@ router.post('/maintenance-mode', auth, async (req, res) => {
         maintenanceMode: enabled
       });
     }
+
+    // Drop the cached value so the change takes effect on the very next
+    // request rather than up to five seconds later.
+    invalidateMaintenance();
 
     console.log(`🔧 Maintenance mode ${enabled ? 'ENABLED' : 'DISABLED'} by superadmin`);
     res.json({ success: true, maintenanceMode: enabled });

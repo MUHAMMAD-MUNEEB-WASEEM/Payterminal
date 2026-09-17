@@ -13,7 +13,41 @@ services:
         generateValue: true
       - key: FRONTEND_URL
         sync: false
+      # Public URL of this service, e.g. https://payterminal-backend.onrender.com
+      # Used for the BrokerPay 3D Secure return URL and webhook URL.
+      - key: BACKEND_URL
+        sync: false
+
+      # Which behaviour to run: "latest" or "legacy".
+      # Set this to legacy to put every change below back the way it was,
+      # without deploying older code.
+      - key: PT_MODE
+        value: latest
+
+      # Super admin password. Until this is set, the password that was
+      # committed to the repository still works and the server warns about it
+      # on every boot. Set it in the Render dashboard, not here.
+      - key: SUPER_ADMIN_PASSWORD
+        sync: false
+
+      # Only used when the database has no users at all. Leave unset to have a
+      # password generated and printed to the deploy logs once.
+      - key: ADMIN_INITIAL_PASSWORD
+        sync: false
+
+      # Comma-separated list of origins allowed to call this API with
+      # credentials. While empty, every origin is accepted.
+      #   https://payterminal.vercel.app,https://your-crm-host
+      - key: ALLOWED_ORIGINS
+        sync: false
+
     disk:
       name: payterminal-data
       mountPath: /opt/render/project/src/backend/data
       sizeGB: 1
+
+# The mount path above and src/db.js must agree. Render checks the repo out at
+# /opt/render/project/src, so the mount path is exactly <repo>/backend/data,
+# which is what src/db.js resolves to. The previous code wrote to /data
+# instead — a directory on the container filesystem, not on this disk — so
+# nothing written in production survived a redeploy.

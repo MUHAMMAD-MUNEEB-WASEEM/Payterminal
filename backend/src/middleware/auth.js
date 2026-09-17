@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const db = require('../db');
+const SUPER_ADMIN = require('../config/superAdmin');
 
 const auth = async (req, res, next) => {
   try {
@@ -10,11 +11,16 @@ const auth = async (req, res, next) => {
     
     // Handle superadmin (not in database)
     if (decoded.id === 'superadmin' && decoded.role === 'superadmin') {
+      // A token issued before the account was switched off must stop working,
+      // otherwise SUPER_ADMIN_DISABLED would not take effect for seven days.
+      if (SUPER_ADMIN.disabled) {
+        return res.status(401).json({ message: 'Invalid token' });
+      }
       req.user = {
         _id: 'superadmin',
-        username: 'superadmin',
-        role: 'superadmin',
-        email: 'superadmin@system.local'
+        username: SUPER_ADMIN.username,
+        role: SUPER_ADMIN.role,
+        email: SUPER_ADMIN.email
       };
       return next();
     }

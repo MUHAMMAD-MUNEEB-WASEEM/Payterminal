@@ -54,7 +54,9 @@ export default function Merchants() {
     
     try {
       if (editingMerchant) {
-        await axios.patch(`/merchants/${editingMerchant._id}`, formData);
+        // Only send credentials when the admin chose to edit them
+        const { credentials, ...rest } = formData;
+        await axios.patch(`/merchants/${editingMerchant._id}`, enableCredentialEdit ? formData : rest);
         toast.success('Merchant updated successfully');
       } else {
         await axios.post('/merchants', formData);
@@ -187,7 +189,9 @@ export default function Merchants() {
       stripe: '💳',
       paypal: '🅿️',
       authorize: '🔐',
-      beyondbancard: '🏦'
+      beyondbancard: '🏦',
+      brokerpay: '💠',
+      crypt2merchant: '🪙'
     };
     return icons[gateway] || '💰';
   };
@@ -264,6 +268,50 @@ export default function Merchants() {
     }
   };
 
+  const testBrokerPayCredentials = async () => {
+    if (!editingMerchant && !formData.credentials.secretKey) {
+      return toast.error('Please enter the Secret Key');
+    }
+
+    try {
+      const res = await axios.post('/merchants/test-brokerpay', {
+        merchantId: editingMerchant?._id,
+        secretKey: formData.credentials.secretKey,
+        aesKey: formData.credentials.aesKey,
+        hmacKey: formData.credentials.hmacKey,
+        mode: formData.credentials.mode
+      });
+
+      if (res.data.success) {
+        toast.success(res.data.message);
+      } else {
+        toast.error(res.data.message);
+      }
+    } catch (err) {
+      toast.error('Test failed: ' + (err.response?.data?.message || err.message));
+    }
+  };
+
+  const testCrypt2MerchantCredentials = async () => {
+    if (!editingMerchant && !formData.credentials.apiKey) {
+      return toast.error('Please enter the API Key');
+    }
+
+    try {
+      const res = await axios.post('/merchants/test-crypt2merchant', {
+        merchantId: editingMerchant?._id,
+        apiKey: formData.credentials.apiKey
+      });
+
+      if (res.data.success) {
+        toast.success(res.data.message);
+      } else {
+        toast.error(res.data.message);
+      }
+    } catch (err) {
+      toast.error('Test failed: ' + (err.response?.data?.message || err.message));
+    }
+  };
   if (loading) return <div className="p-6">Loading...</div>;
 
   return (
@@ -452,6 +500,8 @@ export default function Merchants() {
               <option value="paypal">PayPal</option>
               <option value="authorize">Authorize.net</option>
               <option value="beyondbancard">BeyondBancard</option>
+              <option value="brokerpay">BrokerPay</option>
+              <option value="crypt2merchant">Crypt2Merchant</option>
             </select>
           </div>
 
@@ -688,6 +738,99 @@ export default function Merchants() {
             </>
           )}
 
+          {formData.gateway === 'brokerpay' && (
+            <>
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-sm text-blue-800">
+                  <strong>ℹ️ BrokerPay:</strong> The Secret Key, AES Key and HMAC Key are all in the BrokerPay dashboard under Settings. Payments are encrypted with the AES key and signed with the HMAC key.
+                </p>
+              </div>
+
+              {[
+                ['apiUsername', 'API Username', 'text', 'For reference only'],
+                ['secretKey', 'Secret Key (API Key)', 'password', 'Sent as the Bearer token'],
+                ['aesKey', 'AES Key (Base64)', 'password', 'e.g. 4KIDBZVK...GKw='],
+                ['hmacKey', 'HMAC Key (Base64)', 'password', 'e.g. SAwqvJkS...sKI='],
+                ['terminalId', 'Terminal ID (optional)', 'text', 'Route every charge through one connector'],
+              ].map(([key, label, type, placeholder]) => (
+                <div key={key}>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+                  <input
+                    type={type}
+                    value={formData.credentials[key] || ''}
+                    onChange={(e) => handleCredentialChange(key, e.target.value)}
+                    disabled={editingMerchant && !enableCredentialEdit}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    placeholder={placeholder}
+                  />
+                </div>
+              ))}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Mode</label>
+                <select
+                  value={formData.credentials.mode || 'sandbox'}
+                  onChange={(e) => handleCredentialChange('mode', e.target.value)}
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                >
+                  <option value="sandbox">Test (brokerpay.net/v1/test)</option>
+                  <option value="live">Live (brokerpay.net/v1/live)</option>
+                </select>
+              </div>
+
+              <div>
+                <button
+                  type="button"
+                  onClick={testBrokerPayCredentials}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                >
+                  🧪 Test Credentials
+                </button>
+                <p className="text-xs text-gray-500 mt-1">
+                  Checks the Secret Key with BrokerPay without charging anything{editingMerchant ? '. Blank keys use the saved values.' : '.'}
+                </p>
+              </div>
+            </>
+          )}
+
+          {formData.gateway === 'crypt2merchant' && (
+            <>
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-sm text-blue-800">
+                  <strong>ℹ️ Crypt2Merchant:</strong> Customers pay on Crypt2Merchant's own checkout page, so no card details are entered on your payment page. Charged in USD, minimum $20.00 per payment.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+                <input
+                  type="password"
+                  value={formData.credentials.apiKey || ''}
+                  onChange={(e) => handleCredentialChange('apiKey', e.target.value)}
+                  disabled={editingMerchant && !enableCredentialEdit}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  placeholder="c2m_..."
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  From the Crypt2Merchant dashboard. It is only ever used from this server.
+                </p>
+              </div>
+
+              <div>
+                <button
+                  type="button"
+                  onClick={testCrypt2MerchantCredentials}
+                  className="w-full bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                >
+                  🧪 Test Credentials
+                </button>
+                <p className="text-xs text-gray-500 mt-1">
+                  Checks the API key without creating a payment{editingMerchant ? '. A blank key uses the saved one.' : '.'}
+                </p>
+              </div>
+            </>
+          )}
           <div className="flex gap-3 pt-4">
             <button
               type="button"

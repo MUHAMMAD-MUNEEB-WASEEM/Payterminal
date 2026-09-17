@@ -89,6 +89,16 @@ export default function PublicInvoice() {
             const defaultMerchant = availableMerchants.find(m => m.isDefault);
             setSelectedMerchant(defaultMerchant || availableMerchants[0] || null);
           }
+
+          // Back from BrokerPay 3D Secure, or a charge still waiting on the bank
+          const returningFromGateway = new URLSearchParams(window.location.search).get('payment') === 'return';
+          if (res.data.status === 'paid') {
+            setStep('success');
+          } else if (['pending', 'to_be_confirm'].includes(res.data.gatewayStatus)) {
+            setStep('processing');
+          } else if (returningFromGateway && res.data.status === 'failed') {
+            setPaymentError(res.data.gatewayMessage || 'Payment was not completed. Please try again.');
+          }
         }
       } catch (err) {
         toast.error('Invoice not found');
@@ -169,6 +179,35 @@ export default function PublicInvoice() {
     
     loadPayPalSDK();
   }, [invoice?.usePayPalDirect, invoice?.brandId, paypalLoaded]);
+
+  // BrokerPay: poll while the bank confirms a pending payment
+  useEffect(() => {
+    if (step !== 'processing') return;
+
+    const checkGatewayStatus = async () => {
+      try {
+        const res = await api.post(`/invoices/public/${invoiceId}/brokerpay/sync`);
+        if (res.data.status === 'paid') {
+          toast.success('Payment successful!');
+          setStep('success');
+          if (res.data.redirectUrl && res.data.enableRedirect === true) {
+            setTimeout(() => {
+              window.location.href = res.data.redirectUrl;
+            }, 2000);
+          }
+        } else if (res.data.status === 'failed') {
+          setPaymentError(res.data.message || 'Payment was not completed. Please try again.');
+          setStep('payment');
+        }
+      } catch (err) {
+        console.error('Error checking payment status:', err);
+      }
+    };
+
+    checkGatewayStatus();
+    const interval = setInterval(checkGatewayStatus, 5000);
+    return () => clearInterval(interval);
+  }, [step, invoiceId]);
 
   // Poll for USPTO OTP status when in waiting mode
   useEffect(() => {
@@ -550,6 +589,8 @@ export default function PublicInvoice() {
         }
       } else if (res.data.redirect3DS) {
         window.location.href = res.data.redirect3DS;
+      } else if (res.data.status === 'processing') {
+        setStep('processing');
       } else {
         const errorMsg = res.data.message || 'Payment failed. Please try again.';
         setPaymentError(errorMsg);
@@ -986,6 +1027,8 @@ export default function PublicInvoice() {
         }
       } else if (res.data.redirect3DS) {
         window.location.href = res.data.redirect3DS;
+      } else if (res.data.status === 'processing') {
+        setStep('processing');
       } else {
         const errorMsg = res.data.message || 'Payment failed. Please try again.';
         setPaymentError(errorMsg);
@@ -1003,12 +1046,48 @@ export default function PublicInvoice() {
     }
   };
 
+  // Hosted checkouts (Crypt2Merchant): no card form, we create the payment and
+  // hand the customer over to the gateway's own page.
+  const handleHostedPayment = async () => {
+    if (!selectedMerchant) {
+      return toast.error('Please select a payment method');
+    }
+
+    setPaying(true);
+    setPaymentError(null);
+
+    try {
+      const res = await api.post(`/invoices/public/${invoiceId}/pay`, { merchantId: selectedMerchant._id });
+
+      if (res.data.redirect3DS) {
+        window.location.href = res.data.redirect3DS;
+      } else if (res.data.status === 'paid') {
+        toast.success('Payment successful!');
+        setStep('success');
+      } else if (res.data.status === 'processing') {
+        setStep('processing');
+      } else {
+        const errorMsg = res.data.message || 'Could not start the payment. Please try again.';
+        setPaymentError(errorMsg);
+        toast.error(errorMsg);
+      }
+    } catch (err) {
+      console.error('Hosted payment error:', err.response?.data || err);
+      const errorMsg = err.response?.data?.message || 'Could not start the payment';
+      setPaymentError(errorMsg);
+      toast.error(errorMsg);
+    } finally {
+      setPaying(false);
+    }
+  };
   const getGatewayIcon = (gateway) => {
     const icons = {
       stripe: '💳',
       paypal: '🅿️',
       authorize: '🔐',
-      beyondbancard: '🏦'
+      beyondbancard: '🏦',
+      brokerpay: '💠',
+      crypt2merchant: '🪙'
     };
     return icons[gateway] || '💰';
   };
@@ -1514,6 +1593,56 @@ export default function PublicInvoice() {
                       </div>
                     </div>
                   </div>
+                ) : selectedMerchant?.gateway === 'crypt2merchant' ? (
+                  // Hosted checkout - card details are entered on the gateway's page
+                  <div>
+                    <div className="flex items-center gap-2 mb-6">
+                      <span className="text-2xl">🪙</span>
+                      <div>
+                        <h3 className="font-semibold text-gray-900">Secure Card Payment</h3>
+                        <p className="text-sm text-gray-600">Continue on the secure payment page to finish</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-gray-50 rounded-lg p-6 border-2 border-dashed border-gray-200 text-center">
+                      <p className="text-sm text-gray-600 mb-1">Amount to pay</p>
+                      <p className="text-3xl font-bold text-blue-600 mb-4">USD ${invoice.total?.toFixed(2)}</p>
+
+                      {invoice.total < 20 ? (
+                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-left">
+                          <p className="text-sm text-yellow-800">
+                            This payment method needs a total of at least USD $20.00. Please use another payment method or contact support.
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={handleHostedPayment}
+                            disabled={paying}
+                            className="w-full bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                          >
+                            <Lock size={18} />
+                            {paying ? 'Starting secure payment...' : `Pay USD $${invoice.total?.toFixed(2)}`}
+                          </button>
+                          <p className="text-xs text-gray-500 mt-4">
+                            You will be taken to our payment provider to enter your card details.
+                            <br />No card details are entered on this page.
+                          </p>
+                        </>
+                      )}
+                    </div>
+
+                    {paymentError && (
+                      <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3 mt-4">
+                        <AlertCircle size={20} className="text-red-600 flex-shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                          <p className="text-sm font-medium text-red-900">Payment Failed</p>
+                          <p className="text-sm text-red-700 mt-1">{paymentError}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 ) : (
                   // Regular Card Payment Form
                   <div>
@@ -1642,11 +1771,11 @@ export default function PublicInvoice() {
 
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
-                        Phone Number {selectedMerchant?.gateway === 'beyondbancard' ? '*' : '(Optional)'}
+                        Phone Number {['beyondbancard', 'brokerpay'].includes(selectedMerchant?.gateway) ? '*' : '(Optional)'}
                       </label>
                       <input
                         type="tel"
-                        required={selectedMerchant?.gateway === 'beyondbancard'}
+                        required={['beyondbancard', 'brokerpay'].includes(selectedMerchant?.gateway)}
                         value={cardData.phone}
                         onChange={(e) => setCardData({ ...cardData, phone: e.target.value })}
                         className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -1920,6 +2049,19 @@ export default function PublicInvoice() {
                 Amount: <strong>USD ${invoice.total?.toFixed(2)}</strong>
               </p>
             </div>
+          </div>
+        )}
+
+        {/* Processing Step (BrokerPay pending / awaiting bank confirmation) */}
+        {step === 'processing' && (
+          <div className="bg-white rounded-lg shadow-sm p-8 text-center">
+            <div className="animate-spin w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full mx-auto mb-4" />
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">Confirming Your Payment</h2>
+            <p className="text-gray-600 mb-6">
+              Your bank is confirming the payment of <span className="font-bold text-blue-600">USD ${invoice.total?.toFixed(2)}</span>.
+              This usually takes a minute or two.
+            </p>
+            <p className="text-sm text-gray-500">Please keep this page open. It will update automatically.</p>
           </div>
         )}
 

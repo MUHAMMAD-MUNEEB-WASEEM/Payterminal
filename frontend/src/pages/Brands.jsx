@@ -327,7 +327,7 @@ export default function Brands() {
                         className="inline-flex items-center gap-1 px-2 py-1 bg-purple-50 text-purple-700 rounded text-xs font-medium"
                         title={merchant.nickname}
                       >
-                        <span>{merchant.gateway === 'stripe' ? '💳' : merchant.gateway === 'paypal' ? '🅿️' : '🔐'}</span>
+                        <span>{merchant.gateway === 'stripe' ? '💳' : merchant.gateway === 'paypal' ? '🅿️' : merchant.gateway === 'brokerpay' ? '💠' : merchant.gateway === 'crypt2merchant' ? '🪙' : '🔐'}</span>
                         <span className="max-w-[100px] truncate">{merchant.nickname}</span>
                       </span>
                     ))}
@@ -462,7 +462,7 @@ export default function Brands() {
                   {brandMerchants.map(merchant => (
                     <div key={merchant._id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                       <div className="flex items-center gap-3">
-                        <span className="text-2xl">{merchant.gateway === 'stripe' ? '💳' : merchant.gateway === 'paypal' ? '🅿️' : '🔐'}</span>
+                        <span className="text-2xl">{merchant.gateway === 'stripe' ? '💳' : merchant.gateway === 'paypal' ? '🅿️' : merchant.gateway === 'brokerpay' ? '💠' : merchant.gateway === 'crypt2merchant' ? '🪙' : '🔐'}</span>
                         <div>
                           <p className="font-medium text-gray-900">{merchant.nickname}</p>
                           <p className="text-xs text-gray-500 capitalize">{merchant.gateway}</p>
@@ -491,7 +491,7 @@ export default function Brands() {
                     .map(merchant => (
                       <div key={merchant._id} className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg">
                         <div className="flex items-center gap-3">
-                          <span className="text-2xl">{merchant.gateway === 'stripe' ? '💳' : merchant.gateway === 'paypal' ? '🅿️' : '🔐'}</span>
+                          <span className="text-2xl">{merchant.gateway === 'stripe' ? '💳' : merchant.gateway === 'paypal' ? '🅿️' : merchant.gateway === 'brokerpay' ? '💠' : merchant.gateway === 'crypt2merchant' ? '🪙' : '🔐'}</span>
                           <div>
                             <p className="font-medium text-gray-900">{merchant.nickname}</p>
                             <p className="text-xs text-gray-500 capitalize">{merchant.gateway}</p>

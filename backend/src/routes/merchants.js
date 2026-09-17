@@ -44,8 +44,8 @@ router.post('/', auth, adminOnly, async (req, res) => {
       return res.status(400).json({ message: 'Nickname and gateway are required' });
     }
     
-    if (!['stripe', 'paypal', 'authorize', 'beyondbancard'].includes(gateway)) {
-      return res.status(400).json({ message: 'Invalid gateway. Must be stripe, paypal, authorize, or beyondbancard' });
+    if (!['stripe', 'paypal', 'authorize', 'beyondbancard', 'brokerpay', 'crypt2merchant'].includes(gateway)) {
+      return res.status(400).json({ message: 'Invalid gateway. Must be stripe, paypal, authorize, beyondbancard, brokerpay, or crypt2merchant' });
     }
     
     const merchant = await db.merchants.insert({
@@ -73,7 +73,14 @@ router.patch('/:id', auth, adminOnly, async (req, res) => {
     const updateData = { updatedAt: new Date().toISOString() };
     
     if (nickname !== undefined) updateData.nickname = nickname;
-    if (credentials !== undefined) updateData.credentials = credentials;
+    if (credentials !== undefined) {
+      // Blank fields mean "leave as is", so editing one key does not erase the rest
+      const existing = await db.merchants.findOne({ _id: req.params.id });
+      const changed = Object.fromEntries(
+        Object.entries(credentials || {}).filter(([, value]) => value !== '' && value !== null && value !== undefined)
+      );
+      updateData.credentials = { ...(existing?.credentials || {}), ...changed };
+    }
     if (isActive !== undefined) updateData.isActive = isActive;
     if (amountLimit !== undefined) updateData.amountLimit = amountLimit ? Number(amountLimit) : null;
     if (ticketSize !== undefined) updateData.ticketSize = ticketSize ? Number(ticketSize) : null;
@@ -427,6 +434,60 @@ router.post('/debug-beyondbancard-payment', auth, adminOnly, async (req, res) =>
       error: err.message,
       stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
+  }
+});
+
+// Test BrokerPay credentials (admin only). Blank fields fall back to the saved merchant.
+router.post('/test-brokerpay', auth, adminOnly, async (req, res) => {
+  try {
+    const { merchantId, secretKey, aesKey, hmacKey, mode } = req.body;
+    const saved = merchantId ? (await db.merchants.findOne({ _id: merchantId }))?.credentials || {} : {};
+    const credentials = {
+      secretKey: secretKey || saved.secretKey,
+      aesKey: aesKey || saved.aesKey,
+      hmacKey: hmacKey || saved.hmacKey,
+      mode: mode || saved.mode || 'sandbox'
+    };
+
+    if (!credentials.secretKey) {
+      return res.status(400).json({ message: 'Secret Key is required' });
+    }
+
+    const { testBrokerPayCredentials, encryptPayload } = require('../utils/brokerpay');
+
+    // Malformed AES/HMAC keys would otherwise only show up on a customer's payment
+    if (credentials.aesKey || credentials.hmacKey) {
+      try {
+        encryptPayload({}, credentials.aesKey, credentials.hmacKey);
+      } catch (keyErr) {
+        return res.json({ success: false, message: '❌ ' + keyErr.message });
+      }
+    }
+
+    const result = await testBrokerPayCredentials(credentials);
+    const keysNote = credentials.aesKey && credentials.hmacKey ? '' : ' (AES and HMAC keys still missing)';
+    res.json({ ...result, message: (result.success ? '✅ ' : '❌ ') + result.message + (result.success ? keysNote : '') });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Test Crypt2Merchant credentials (admin only). A blank key falls back to the saved merchant.
+router.post('/test-crypt2merchant', auth, adminOnly, async (req, res) => {
+  try {
+    const { merchantId, apiKey } = req.body;
+    const saved = merchantId ? (await db.merchants.findOne({ _id: merchantId }))?.credentials || {} : {};
+    const credentials = { apiKey: apiKey || saved.apiKey };
+
+    if (!credentials.apiKey) {
+      return res.status(400).json({ message: 'API Key is required' });
+    }
+
+    const { testCrypt2MerchantCredentials } = require('../utils/crypt2merchant');
+    const result = await testCrypt2MerchantCredentials(credentials);
+    res.json({ ...result, message: (result.success ? '✅ ' : '❌ ') + result.message });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 

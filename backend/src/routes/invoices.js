@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
+const crypto = require('crypto');
 const { auth, adminOnly, adminOrCompliance } = require('../middleware/auth');
 const { generateInvoiceNumber } = require('../utils/invoiceNumber');
 const { createPaymentOrder, getOrderStatus } = require('../utils/ngenius');
@@ -10,6 +11,165 @@ async function withBrand(invoice) {
   if (!invoice) return null;
   const brand = invoice.brandId ? await db.brands.findOne({ _id: invoice.brandId }) : null;
   return { ...invoice, brand: brand || null };
+}
+
+// BrokerPay results that are neither paid nor failed yet
+const GATEWAY_WAITING = ['pending', 'to_be_confirm'];
+
+// Single client IP; trust proxy is set, so req.ip is the visitor behind Render
+function customerIp(req) {
+  const ip = String(req.ip || req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+  return ip === '::1' ? '127.0.0.1' : ip;
+}
+
+// Public base URL of this API, for gateway return and webhook URLs
+function publicApiBase(req) {
+  return (process.env.BACKEND_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+}
+
+function buildBillingDetails(req, body, gateway) {
+  const { cardNumber, cardHolder, expiryMonth, expiryYear } = body;
+  const userAgent = req.headers['user-agent'] || 'Unknown';
+  return {
+    firstName: body.firstName,
+    lastName: body.lastName,
+    companyName: body.companyName,
+    addressLine1: body.addressLine1,
+    addressLine2: body.addressLine2,
+    city: body.city,
+    state: body.state,
+    postalCode: body.postalCode,
+    countryCode: body.countryCode,
+    phone: body.phone,
+    cardholderName: cardHolder,
+    cardLast4: cardNumber ? cardNumber.slice(-4) : null,
+    cardExpiry: expiryMonth && expiryYear ? `${expiryMonth}/${expiryYear}` : null,
+    paymentGateway: gateway,
+    // Payment metadata
+    paymentTimestamp: new Date().toISOString(),
+    clientIp: req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.connection.remoteAddress || req.socket.remoteAddress || 'Unknown',
+    userAgent,
+    deviceFingerprint: userAgent // Simple fingerprint using user agent
+  };
+}
+
+/**
+ * Marks an invoice paid and adds it to the merchant's processed volume.
+ * Only the first caller wins, so a BrokerPay return, webhook and status poll
+ * arriving together cannot count the same payment twice.
+ */
+async function markInvoicePaid({ invoice, merchantId, transactionId, billingDetails }) {
+  const updated = await db.invoices.update(
+    { _id: invoice._id, status: { $ne: 'paid' } },
+    {
+      $set: {
+        status: 'paid',
+        paymentOrderRef: transactionId,
+        selectedMerchantId: merchantId,
+        billingDetails,
+        updatedAt: new Date().toISOString()
+      },
+      $unset: { pendingBillingDetails: true, gatewayStatus: true, gatewayMessage: true }
+    }
+  );
+  if (!updated) return false;
+
+  const freshMerchant = await db.merchants.findOne({ _id: merchantId });
+  if (!freshMerchant) return true;
+
+  const newProcessedAmount = (freshMerchant.processedAmount || 0) + invoice.total;
+  await db.merchants.update(
+    { _id: merchantId },
+    { $set: { processedAmount: newProcessedAmount, updatedAt: new Date().toISOString() } }
+  );
+  console.log(`Merchant amount updated: ${freshMerchant.processedAmount || 0} -> ${newProcessedAmount}`);
+
+  // Check if limit reached and notify
+  if (freshMerchant.amountLimit && newProcessedAmount >= freshMerchant.amountLimit) {
+    await db.notifications.insert({
+      type: 'merchant_limit_reached',
+      merchantId: freshMerchant._id,
+      merchantNickname: freshMerchant.nickname,
+      amountLimit: freshMerchant.amountLimit,
+      processedAmount: newProcessedAmount,
+      message: `Merchant "${freshMerchant.nickname}" has reached its amount limit of $${freshMerchant.amountLimit.toFixed(2)}`,
+      read: false,
+      createdAt: new Date().toISOString(),
+    });
+    console.log('Notification created for limit reached');
+  }
+  return true;
+}
+
+async function brandRedirect(invoice) {
+  const brand = invoice.brandId ? await db.brands.findOne({ _id: invoice.brandId }) : null;
+  return {
+    redirectUrl: (brand && brand.enableRedirect && brand.redirectUrl) ? brand.redirectUrl : null,
+    enableRedirect: (brand && brand.enableRedirect) ? true : false,
+    brand: brand ? { name: brand.name, redirectUrl: brand.redirectUrl, enableRedirect: brand.enableRedirect } : null
+  };
+}
+
+/**
+ * Settles a BrokerPay payment that was left pending or sent to 3D Secure,
+ * using the Status API as the source of truth (webhooks are not signed).
+ * Returns { status: 'paid' | 'failed' | 'processing' | <unchanged>, message }.
+ */
+async function syncBrokerPayInvoice(invoiceId) {
+  const invoice = await db.invoices.findOne({ _id: invoiceId });
+  if (!invoice) return { status: 'not_found' };
+  if (invoice.status === 'paid') return { status: 'paid' };
+  if (!invoice.gatewayOrderId && !invoice.paymentOrderRef) return { status: invoice.status };
+
+  const merchant = invoice.selectedMerchantId ? await db.merchants.findOne({ _id: invoice.selectedMerchantId }) : null;
+  if (!merchant || merchant.gateway !== 'brokerpay') return { status: invoice.status };
+
+  const { getBrokerPayTransaction } = require('../utils/brokerpay');
+  const tx = await getBrokerPayTransaction(merchant.credentials, {
+    transactionId: invoice.paymentOrderRef,
+    orderId: invoice.gatewayOrderId
+  });
+  console.log(`BrokerPay sync ${invoice.invoiceNumber}: ${tx.state} (${tx.resultStatus || tx.errorCode}) ${tx.message || ''}`);
+
+  if (tx.state === 'paid') {
+    if (tx.amount !== null && Math.abs(tx.amount - invoice.total) > 0.01) {
+      console.error(`❌ BrokerPay amount mismatch on ${invoice.invoiceNumber}: paid ${tx.amount}, invoice ${invoice.total}`);
+      await db.invoices.update({ _id: invoice._id }, { $set: { gatewayStatus: 'amount_mismatch', gatewayMessage: `Gateway reports ${tx.amount} ${tx.currency || ''}`, updatedAt: new Date().toISOString() } });
+      return { status: 'processing', message: 'Payment needs manual review' };
+    }
+    await markInvoicePaid({
+      invoice,
+      merchantId: merchant._id,
+      transactionId: tx.transactionId || invoice.paymentOrderRef,
+      billingDetails: invoice.pendingBillingDetails || { paymentGateway: 'brokerpay' }
+    });
+    return { status: 'paid' };
+  }
+
+  if (tx.state === 'failed') {
+    await db.invoices.update(
+      { _id: invoice._id, status: { $ne: 'paid' } },
+      { $set: { status: 'failed', gatewayStatus: tx.resultStatus, gatewayMessage: tx.message, updatedAt: new Date().toISOString() } }
+    );
+    return { status: 'failed', message: tx.message || 'Payment was not completed' };
+  }
+
+  if (tx.state === 'in_progress') {
+    await db.invoices.update({ _id: invoice._id }, { $set: { gatewayStatus: tx.resultStatus, updatedAt: new Date().toISOString() } });
+    return { status: 'processing', message: tx.message };
+  }
+
+  // Lookup failed (network, 401, 404) - leave the invoice as it is and try again later
+  return { status: GATEWAY_WAITING.includes(invoice.gatewayStatus) ? 'processing' : invoice.status, message: tx.message };
+}
+
+// Customers poll while a payment is pending; don't forward every poll to BrokerPay
+const lastBrokerPaySync = new Map();
+function syncThrottled(invoiceId) {
+  const now = Date.now();
+  if (now - (lastBrokerPaySync.get(invoiceId) || 0) < 3000) return true;
+  lastBrokerPaySync.set(invoiceId, now);
+  return false;
 }
 
 // Get all invoices (filtered by user for non-admins, show all for compliance)
@@ -469,6 +629,15 @@ router.post('/public/:id/pay', async (req, res) => {
       return res.status(400).json({ message: 'Customer verification required' });
     }
 
+    // A BrokerPay charge still waiting on the bank must settle before another attempt
+    if (GATEWAY_WAITING.includes(invoice.gatewayStatus)) {
+      const synced = await syncBrokerPayInvoice(invoice._id).catch(() => ({ status: 'processing' }));
+      if (synced.status === 'paid') return res.status(400).json({ message: 'Invoice already paid' });
+      if (synced.status === 'processing') {
+        return res.status(409).json({ status: 'processing', message: 'A payment for this invoice is still being confirmed by the bank' });
+      }
+    }
+
     // Validate merchant
     if (!merchantId) {
       console.log('ERROR: No merchantId provided');
@@ -553,6 +722,31 @@ router.post('/public/:id/pay', async (req, res) => {
           logToFile('🔷 NMI processor returned: ' + JSON.stringify(result, null, 2));
           break;
         }
+        case 'crypt2merchant': {
+          // Hosted checkout: no card details here, the customer pays on their page
+          const { createCrypt2MerchantSession } = require('../utils/crypt2merchant');
+          const apiBase = publicApiBase(req);
+          // Their callback is not signed, so the URL carries a secret only we and
+          // Crypt2Merchant know. It is checked before anything is marked paid.
+          const callbackToken = crypto.randomBytes(24).toString('hex');
+          paymentData.orderId = invoice.invoiceNumber;
+          paymentData.callbackUrl = `${apiBase}/api/invoices/public/${invoice._id}/crypt2merchant/callback?token=${callbackToken}`;
+          result = await createCrypt2MerchantSession(merchant.credentials, paymentData);
+          if (result.pending) result.callbackToken = callbackToken;
+          logToFile('🪙 Crypt2Merchant returned: ' + JSON.stringify(result));
+          break;
+        }
+        case 'brokerpay': {
+          const { processBrokerPayPayment } = require('../utils/brokerpay');
+          const apiBase = publicApiBase(req);
+          paymentData.orderId = `${invoice.invoiceNumber}-${Date.now().toString(36)}`;
+          paymentData.ipAddress = customerIp(req);
+          paymentData.responseUrl = `${apiBase}/api/invoices/public/${invoice._id}/brokerpay/return`;
+          paymentData.webhookUrl = `${apiBase}/api/invoices/public/${invoice._id}/brokerpay/webhook`;
+          result = await processBrokerPayPayment(merchant.credentials, paymentData);
+          logToFile('🔷 BrokerPay processor returned: ' + JSON.stringify(result));
+          break;
+        }
         default:
           console.log(`ERROR: Unsupported gateway: ${merchant.gateway}`);
           return res.status(400).json({ message: 'Unsupported payment gateway: ' + merchant.gateway });
@@ -576,95 +770,57 @@ router.post('/public/:id/pay', async (req, res) => {
     console.log('\n>>> Payment processor result:', JSON.stringify(result, null, 2));
     logToFile('\n>>> Processor result: ' + JSON.stringify(result, null, 2));
 
+    // BrokerPay 3D Secure or bank confirmation: settled later by return URL, webhook or polling
+    if (result.pending) {
+      await db.invoices.update(
+        { _id: invoice._id },
+        {
+          $set: {
+            status: 'pending',
+            selectedMerchantId: merchantId,
+            paymentOrderRef: result.transactionId,
+            gatewayOrderId: result.orderId,
+            gatewayStatus: result.gatewayStatus,
+            gatewayMessage: result.message || null,
+            ...(result.sessionId ? { gatewaySessionId: result.sessionId } : {}),
+            ...(result.callbackToken ? { gatewayCallbackToken: result.callbackToken } : {}),
+            gatewayReturnUrl: `${(req.get('origin') || process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/pay/${invoice._id}?payment=return`,
+            pendingBillingDetails: buildBillingDetails(req, req.body, merchant.gateway),
+            updatedAt: new Date().toISOString()
+          }
+        }
+      );
+
+      const response = {
+        status: 'processing',
+        message: result.message || 'Payment is being confirmed',
+        transactionId: result.transactionId,
+        redirect3DS: result.redirectUrl || undefined
+      };
+      logToFile('PENDING RESPONSE: ' + JSON.stringify(response));
+      return res.json(response);
+    }
+
     if (result.success) {
       console.log('✅ Payment successful! Processing invoice update...');
       logToFile('✅ PAYMENT SUCCESSFUL');
-      
-      // Update merchant processed amount
-      const freshMerchant = await db.merchants.findOne({ _id: merchantId });
-      const newProcessedAmount = (freshMerchant.processedAmount || 0) + invoice.total;
-      await db.merchants.update(
-        { _id: merchantId },
-        { $set: { processedAmount: newProcessedAmount, updatedAt: new Date().toISOString() } }
-      );
-      
-      console.log(`Merchant amount updated: ${freshMerchant.processedAmount || 0} -> ${newProcessedAmount}`);
-      
-      // Check if limit reached and notify
-      if (freshMerchant.amountLimit && newProcessedAmount >= freshMerchant.amountLimit) {
-        await db.notifications.insert({
-          type: 'merchant_limit_reached',
-          merchantId: freshMerchant._id,
-          merchantNickname: freshMerchant.nickname,
-          amountLimit: freshMerchant.amountLimit,
-          processedAmount: newProcessedAmount,
-          message: `Merchant "${freshMerchant.nickname}" has reached its amount limit of $${freshMerchant.amountLimit.toFixed(2)}`,
-          read: false,
-          createdAt: new Date().toISOString(),
-        });
-        console.log('Notification created for limit reached');
-      }
-      
-      // Capture client metadata
-      const clientIp = req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.connection.remoteAddress || req.socket.remoteAddress || 'Unknown';
-      const userAgent = req.headers['user-agent'] || 'Unknown';
-      const paymentTimestamp = new Date().toISOString();
-      
-      // Update invoice status
-      await db.invoices.update(
-        { _id: invoice._id },
-        { 
-          $set: { 
-            status: 'paid', 
-            paymentOrderRef: result.transactionId,
-            selectedMerchantId: merchantId,
-            billingDetails: {
-              firstName,
-              lastName,
-              companyName,
-              addressLine1,
-              addressLine2,
-              city,
-              state,
-              postalCode,
-              countryCode,
-              phone,
-              cardholderName: cardHolder,
-              cardLast4: cardNumber ? cardNumber.slice(-4) : null,
-              cardExpiry: expiryMonth && expiryYear ? `${expiryMonth}/${expiryYear}` : null,
-              paymentGateway: merchant.gateway,
-              // Payment metadata
-              paymentTimestamp,
-              clientIp,
-              userAgent,
-              deviceFingerprint: userAgent // Simple fingerprint using user agent
-            },
-            updatedAt: new Date().toISOString()
-          } 
-        }
-      );
-      
-      console.log(`Invoice ${invoice.invoiceNumber} marked as paid`);
-      
-      // Fetch updated invoice with brand info
-      const updatedInvoice = await db.invoices.findOne({ _id: invoice._id });
-      const brand = updatedInvoice.brandId ? await db.brands.findOne({ _id: updatedInvoice.brandId }) : null;
-      
-      console.log('Brand redirect info:', {
-        hasBrand: !!brand,
-        enableRedirect: brand?.enableRedirect,
-        hasRedirectUrl: !!brand?.redirectUrl
+
+      await markInvoicePaid({
+        invoice,
+        merchantId,
+        transactionId: result.transactionId,
+        billingDetails: buildBillingDetails(req, req.body, merchant.gateway)
       });
-      
-      const response = { 
-        status: 'paid', 
+
+      console.log(`Invoice ${invoice.invoiceNumber} marked as paid`);
+
+      const response = {
+        status: 'paid',
         message: result.message || 'Payment successful',
         transactionId: result.transactionId,
-        redirectUrl: (brand && brand.enableRedirect && brand.redirectUrl) ? brand.redirectUrl : null,
-        enableRedirect: (brand && brand.enableRedirect) ? true : false,
-        brand: brand ? { name: brand.name, redirectUrl: brand.redirectUrl, enableRedirect: brand.enableRedirect } : null
+        ...(await brandRedirect(invoice))
       };
-      
+
       console.log('Sending success response:', response);
       logToFile('SUCCESS RESPONSE: ' + JSON.stringify(response, null, 2));
       res.json(response);
@@ -717,6 +873,126 @@ router.post('/public/:id/pay', async (req, res) => {
       errorCode: err.code,
       details: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
+  }
+});
+
+// Crypt2Merchant payment callback. It is an unsigned GET, so the URL carries a
+// per-payment token, and the session and amount are both checked before the
+// invoice is marked paid. Their retries repeat a session, so this is idempotent.
+router.all('/public/:id/crypt2merchant/callback', async (req, res) => {
+  try {
+    const params = { ...(req.query || {}), ...(req.body || {}) };
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
+
+    const expected = String(invoice.gatewayCallbackToken || '');
+    const given = String(params.token || '');
+    const tokenValid = expected.length > 0
+      && given.length === expected.length
+      && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+    if (!tokenValid) {
+      console.warn(`❌ Crypt2Merchant callback for ${invoice.invoiceNumber} rejected: bad token`);
+      return res.status(403).json({ message: 'Invalid callback token' });
+    }
+
+    if (invoice.gatewaySessionId && params.session_id && params.session_id !== invoice.gatewaySessionId) {
+      console.warn(`❌ Crypt2Merchant callback for ${invoice.invoiceNumber} rejected: session mismatch`);
+      return res.status(409).json({ message: 'Session does not belong to this invoice' });
+    }
+
+    if (invoice.status === 'paid') return res.json({ received: true, status: 'paid' });
+
+    // The customer can change the amount on the hosted page, so check what arrived
+    const received = Number(params.value_coin);
+    if (!Number.isFinite(received) || received + 0.01 < invoice.total) {
+      console.warn(`❌ Crypt2Merchant underpayment on ${invoice.invoiceNumber}: ${params.value_coin} of ${invoice.total}`);
+      await db.invoices.update(
+        { _id: invoice._id, status: { $ne: 'paid' } },
+        { $set: { gatewayStatus: 'underpaid', gatewayMessage: `Received ${params.value_coin} USDC of ${invoice.total} USD`, updatedAt: new Date().toISOString() } }
+      );
+      await db.notifications.insert({
+        type: 'payment_underpaid',
+        invoiceId: invoice._id,
+        invoiceNumber: invoice.invoiceNumber,
+        message: `Invoice ${invoice.invoiceNumber}: Crypt2Merchant reported ${params.value_coin} USDC against a total of $${invoice.total.toFixed(2)}`,
+        read: false,
+        createdAt: new Date().toISOString(),
+      });
+      return res.json({ received: true, status: 'underpaid' });
+    }
+
+    await markInvoicePaid({
+      invoice,
+      merchantId: invoice.selectedMerchantId,
+      transactionId: params.txid_out || params.session_id || null,
+      billingDetails: {
+        ...(invoice.pendingBillingDetails || {}),
+        paymentGateway: 'crypt2merchant',
+        txidOut: params.txid_out || null,
+        valueCoin: params.value_coin || null,
+        sessionId: params.session_id || invoice.gatewaySessionId || null,
+      }
+    });
+    console.log(`✅ Crypt2Merchant payment confirmed for ${invoice.invoiceNumber} (${params.txid_out || 'no txid'})`);
+    res.json({ received: true, status: 'paid' });
+  } catch (err) {
+    console.error('Crypt2Merchant callback error:', err.message);
+    res.status(500).json({ received: false });
+  }
+});
+
+// BrokerPay sends the customer back here after 3D Secure (GET or POST)
+router.all('/public/:id/brokerpay/return', async (req, res) => {
+  try {
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    if (!invoice) return res.status(404).send('Invoice not found');
+
+    let status = invoice.status;
+    try {
+      ({ status } = await syncBrokerPayInvoice(invoice._id));
+    } catch (err) {
+      console.error('BrokerPay return sync error:', err.message);
+    }
+
+    if (status === 'paid') {
+      const { redirectUrl } = await brandRedirect(invoice);
+      if (redirectUrl) return res.redirect(303, redirectUrl);
+    }
+    const fallback = `${(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/pay/${invoice._id}?payment=return`;
+    res.redirect(303, invoice.gatewayReturnUrl || fallback);
+  } catch (err) {
+    res.status(500).send('Could not load payment result');
+  }
+});
+
+// BrokerPay webhook. The payload is not signed, so it only triggers a Status API check.
+router.post('/public/:id/brokerpay/webhook', async (req, res) => {
+  try {
+    console.log(`BrokerPay webhook for invoice ${req.params.id}: ${req.body?.transaction?.result?.status || 'no status'}`);
+    const result = await syncBrokerPayInvoice(req.params.id);
+    res.json({ received: true, status: result.status });
+  } catch (err) {
+    console.error('BrokerPay webhook error:', err.message);
+    res.status(500).json({ received: false });
+  }
+});
+
+// Checkout page polls this while a BrokerPay payment is pending
+router.post('/public/:id/brokerpay/sync', async (req, res) => {
+  try {
+    const invoice = await db.invoices.findOne({ _id: req.params.id });
+    if (!invoice) return res.status(404).json({ message: 'Invoice not found' });
+
+    const result = syncThrottled(invoice._id)
+      ? {
+          status: invoice.status === 'paid' ? 'paid' : GATEWAY_WAITING.includes(invoice.gatewayStatus) ? 'processing' : invoice.status,
+          message: invoice.gatewayMessage
+        }
+      : await syncBrokerPayInvoice(invoice._id);
+
+    res.json({ ...result, ...(result.status === 'paid' ? await brandRedirect(invoice) : {}) });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
   }
 });
 
